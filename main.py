@@ -18,58 +18,179 @@ AIconPack
 
 from __future__ import annotations
 
-import io
-import os
 import subprocess
 import sys
 import threading
-from datetime import datetime
-from pathlib import Path
-from typing import Literal, Sequence
-
-import requests
-from PIL import Image
-from openai import OpenAI
 
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
+import io
+import os
+import time
+import base64
+from pathlib import Path
+from datetime import datetime
+from typing import Literal, Sequence, Mapping, Any
+
+import requests
+from PIL import Image
+from openai import OpenAI, APIConnectionError, RateLimitError
 
 
 # --------------------------------------------------------------------------- #
 # 1) AI 生成模块
 # --------------------------------------------------------------------------- #
 class IconGenerator:
-    """负责和 OpenAI 通信，生成并保存 icon"""
+    """
+    生成软件图标的高级封装
 
-    def __init__(self, api_key: str | None = None) -> None:
+    Parameters
+    ----------
+    api_key : str | None
+        OpenAI API Key，默认读取 env `OPENAI_API_KEY`
+    base_url : str | None
+        自定义接口中转地址，例如 `https://api.myproxy.com/v1`
+    prompt_templates : dict[str, str] | None
+        预设模板，如 {"flat": "{prompt}, flat style, minimal"}；调用时 `style="flat"`
+    request_timeout : int
+        下载图片时的 seconds
+    max_retries : int
+        OpenAI 网络/限流重试次数
+    """
+
+    def __init__(
+        self,
+        api_key: str | None = None,
+        *,
+        base_url: str | None = None,
+        prompt_templates: Mapping[str, str] | None = None,
+        request_timeout: int = 60,
+        max_retries: int = 3,
+    ) -> None:
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
-            raise RuntimeError("OPENAI_API_KEY 未设置")
-        self.client = OpenAI(api_key=self.api_key)
+            raise RuntimeError("环境变量 OPENAI_API_KEY 未设置")
+        self.base_url = base_url or os.getenv("OPENAI_BASE_URL")
+        self.client = (
+            OpenAI(api_key=self.api_key, base_url=self.base_url)
+            if self.base_url
+            else OpenAI(api_key=self.api_key)
+        )
+        self.templates: dict[str, str] = dict(prompt_templates or {})
+        self.timeout = request_timeout
+        self.max_retries = max_retries
 
+    # ------------------------------------------------------------------ #
+    # 模板管理
+    # ------------------------------------------------------------------ #
+    def add_template(self, name: str, template: str, overwrite: bool = False) -> None:
+        if name in self.templates and not overwrite:
+            raise ValueError(f"模板 '{name}' 已存在 (可设 overwrite=True 覆盖)")
+        self.templates[name] = template
+
+    def list_templates(self) -> list[str]:
+        return list(self.templates.keys())
+
+    # ------------------------------------------------------------------ #
+    # 核心生成
+    # ------------------------------------------------------------------ #
     def generate(
         self,
         prompt: str,
         *,
+        style: str | None = None,
+        extra_keywords: Sequence[str] | None = None,
         size: Literal["256x256", "512x512", "1024x1024"] = "1024x1024",
         model: str = "dall-e-3",
+        n: int = 1,
         output_dir: str | Path = "icons",
-        filename: str | None = None,
-    ) -> Path:
-        """向 OpenAI 请求生成一张 PNG icon 并保存"""
-        response = self.client.images.generate(model=model, prompt=prompt, n=1, size=size)
-        url = response.data[0].url
-        img_bytes = requests.get(url, timeout=60).content
-        img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+        filename_prefix: str | None = None,
+        return_format: Literal["path", "pil", "bytes", "b64"] = "path",
+        convert_to_ico: bool = False,
+    ) -> list[Any]:
+        """
+        生成 icon 并返回多种格式
 
+        Parameters
+        ----------
+        prompt : str
+            基础提示词
+        style : str | None
+            引用 add_template / prompt_templates 里的键
+        extra_keywords : list[str] | None
+            附加关键词 (自动用逗号拼接)
+        n : int
+            生成张数 (最大 10)
+        return_format : "path" | "pil" | "bytes" | "b64"
+            控制返回格式
+        convert_to_ico : bool
+            若 True 则 .ico 和 .png 均保存 (需 return_format = "path")
+
+        Returns
+        -------
+        list[Path | PIL.Image | bytes | str]
+            根据 return_format 返回路径 / Image / 原始 bytes / base64 字符串
+        """
+        # ---- 构造 Prompt ----
+        full_prompt = prompt
+        if style and style in self.templates:
+            full_prompt = self.templates[style].format(prompt=prompt)
+        if extra_keywords:
+            full_prompt += ", " + ", ".join(map(str, extra_keywords))
+
+        # ---- 请求 OpenAI (带重试) ----
+        attempts = 0
+        while True:
+            try:
+                response = self.client.images.generate(
+                    model=model,
+                    prompt=full_prompt,
+                    n=min(max(n, 1), 10),
+                    size=size,
+                    response_format="url",
+                )
+                break
+            except (APIConnectionError, RateLimitError) as e:
+                attempts += 1
+                if attempts > self.max_retries:
+                    raise RuntimeError(f"请求失败超过重试次数: {e}") from e
+                time.sleep(2 * attempts)  # 指数退避
+            except Exception as e:
+                raise RuntimeError(f"OpenAI 请求异常: {e}") from e
+
+        # ---- 下载 / 处理 ----
         output_dir = Path(output_dir).expanduser()
         output_dir.mkdir(parents=True, exist_ok=True)
-        if filename is None:
-            filename = f"icon_{datetime.now():%Y%m%d_%H%M%S}.png"
-        path = output_dir / filename
-        img.save(path, format="PNG")
-        return path
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        prefix = filename_prefix or f"icon_{timestamp}"
 
+        results: list[Any] = []
+        for idx, data in enumerate(response.data, start=1):
+            img_bytes = requests.get(data.url, timeout=self.timeout).content
+            img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+
+            if return_format == "pil":
+                results.append(img)
+                continue
+            if return_format == "bytes":
+                results.append(img_bytes)
+                continue
+            if return_format == "b64":
+                results.append(base64.b64encode(img_bytes).decode())
+                continue
+
+            # save to file
+            png_name = f"{prefix}_{idx}.png" if n > 1 else f"{prefix}.png"
+            png_path = output_dir / png_name
+            img.save(png_path, format="PNG")
+
+            if convert_to_ico:
+                ico_path = png_path.with_suffix(".ico")
+                img.resize((256, 256)).save(ico_path, format="ICO")
+
+            results.append(png_path)
+
+        return results
 
 # --------------------------------------------------------------------------- #
 # 2) 打包模块
