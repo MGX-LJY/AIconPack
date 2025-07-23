@@ -490,38 +490,56 @@ class AIconPackGUI(ctk.CTk):
     # ========== AI PAGE ==========
     def _build_ai_page(self):
         p = self.ai_tab
-        p.columnconfigure(1, weight=1); p.rowconfigure(3, weight=1)
+        p.columnconfigure(1, weight=1);
+        p.rowconfigure(3, weight=1)
 
         # Prompt
-        ctk.CTkLabel(p, text="Prompt:", font=("", 14)).grid(row=0, column=0, padx=(18, 10), pady=(16, 6), sticky="e")
+        ctk.CTkLabel(p, text="Prompt:", font=("", 14)).grid(
+            row=0, column=0, sticky="e", padx=18, pady=(16, 6))
         self.prompt_ent = ctk.CTkEntry(p, placeholder_text="极简扁平风蓝色日历图标")
-        self.prompt_ent.grid(row=0, column=1, columnspan=4, sticky="ew", padx=(0, 18), pady=(16, 6))
-        _set_tip(self.prompt_ent, "图标描述文字，将送入 GPT / DALL·E。")
+        self.prompt_ent.grid(
+            row=0, column=1, columnspan=5, sticky="ew", padx=18, pady=(16, 6))
 
-        # 模板 + 尺寸
-        self.style_opt = ctk.CTkOptionMenu(p, values=["(无模板)"] + self.icon_gen.list_templates())
+        # 模板
+        self.style_opt = ctk.CTkOptionMenu(
+            p, values=["(无模板)"] + self.icon_gen.list_templates())
         self.style_opt.set("(无模板)")
-        self.style_opt.grid(row=1, column=0, padx=(18, 10), pady=4)
-        _set_tip(self.style_opt, "选择预设 Prompt 模板。")
+        self.style_opt.grid(row=1, column=0, padx=18, pady=4)
 
-        self.size_opt = ctk.CTkOptionMenu(p, values=["1024x1024", "1024x1792", "1792x1024"])
+        # 生成尺寸（DALL-E）
+        self.size_opt = ctk.CTkOptionMenu(
+            p, values=["1024x1024", "1024x1792", "1792x1024"])
         self.size_opt.set("1024x1024")
-        self.size_opt.grid(row=1, column=1, padx=(0, 16), pady=4, sticky="w")
-        _set_tip(self.size_opt, "DALL·E 3 仅支持这三种尺寸。")
+        self.size_opt.grid(row=1, column=1, padx=10, pady=4)
 
-        # 压缩
-        ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(row=1, column=2, sticky="e", padx=(0, 6))
-        self.comp_slider = ctk.CTkSlider(p, from_=0, to=9, number_of_steps=9, width=140); self.comp_slider.set(6)
-        self.comp_slider.grid(row=1, column=3, padx=(0, 16)); _set_tip(self.comp_slider, "0=无压缩，9=最小体积。")
+        # 导出尺寸（本地压缩）
+        ctk.CTkLabel(p, text="导出尺寸:", font=("", 12)).grid(
+            row=1, column=2, sticky="e", padx=6)
+        self.outsize_opt = ctk.CTkOptionMenu(
+            p, values=["原始", "256", "512", "768"])
+        self.outsize_opt.set("原始")
+        self.outsize_opt.grid(row=1, column=3, padx=10, pady=4)
+
+        # PNG 压缩
+        ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(
+            row=1, column=4, sticky="e", padx=6)
+        self.comp_slider = ctk.CTkSlider(
+            p, from_=0, to=9, number_of_steps=9, width=140)
+        self.comp_slider.set(6)
+        self.comp_slider.grid(row=1, column=5, padx=18)
 
         # 生成按钮
-        self.gen_btn = ctk.CTkButton(p, text="🎨 生成", width=130, command=self._start_generate)
-        self.gen_btn.grid(row=1, column=4, padx=(0, 18)); _set_tip(self.gen_btn, "调用 OpenAI 生成图标。")
+        self.gen_btn = ctk.CTkButton(
+            p, text="🎨 生成", width=130, command=self._start_generate)
+        self.gen_btn.grid(row=1, column=6, padx=18)
 
         # 预览
-        self.preview_lbl = ctk.CTkLabel(p, text="预览区域", fg_color="#151515",
-                                        width=500, height=380, corner_radius=8)
-        self.preview_lbl.grid(row=3, column=0, columnspan=5, sticky="nsew", padx=18, pady=(10, 16))
+        self.preview_lbl = ctk.CTkLabel(
+            p, text="预览区域", fg_color="#151515",
+            width=520, height=380, corner_radius=8)
+        self.preview_lbl.grid(
+            row=3, column=0, columnspan=7,
+            sticky="nsew", padx=18, pady=(10, 16))
 
     # ========== PACK PAGE (centered) ==========
     def _build_pack_page(self):
