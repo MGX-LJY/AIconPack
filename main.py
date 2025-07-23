@@ -30,7 +30,7 @@ import time
 import base64
 from pathlib import Path
 from datetime import datetime
-from typing import Literal, Sequence, Mapping, Any
+from typing import Literal, Sequence, Mapping, Any, Optional, List, Iterable
 
 import requests
 from PIL import Image
@@ -196,49 +196,168 @@ class IconGenerator:
 # 2) 打包模块
 # --------------------------------------------------------------------------- #
 class PyInstallerPacker:
-    """封装 PyInstaller 打包流程"""
+    """
+    封装 PyInstaller 打包流程（可丰富配置给 GUI 调用）
 
-    def __init__(self, onefile: bool = True, clean: bool = True, noconsole: bool = False) -> None:
+    公用方法
+    --------
+    • build_cmd(...)  -> list[str]            构建 PyInstaller 命令，不执行
+    • pack(...)       -> subprocess.CompletedProcess | list[str]
+                                            执行打包；dry_run=True 返回命令
+
+    辅助静态方法
+    ------------
+    • create_version_file(...) -> Path       生成 Windows .version 文件
+    """
+
+    def __init__(
+        self,
+        *,
+        onefile: bool = True,
+        windowed: bool = True,
+        clean: bool = True,
+        debug: bool = False,
+        upx: bool = False,
+        pyinstaller_exe: Optional[str] = None,
+    ) -> None:
         self.onefile = onefile
+        self.windowed = windowed          # True -> --noconsole
         self.clean = clean
-        self.noconsole = noconsole
+        self.debug = debug
+        self.upx = upx
+        self.pyinstaller_exe = pyinstaller_exe or sys.executable
+
+    # ========================  PUBLIC API  ======================== #
+    def build_cmd(
+        self,
+        script_path: str | Path,
+        *,
+        name: str | None = None,
+        icon: str | Path | None = None,
+        version_file: str | Path | None = None,
+        add_data: Sequence[str] | None = None,
+        add_binary: Sequence[str] | None = None,
+        hidden_imports: Sequence[str] | None = None,
+        runtime_hooks: Sequence[str] | None = None,
+        exclude_modules: Sequence[str] | None = None,
+        key: str | None = None,
+        dist_dir: str | Path | None = None,
+        build_dir: str | Path | None = None,
+        workpath: str | Path | None = None,
+        spec_path: str | Path | None = None,
+        extra_args: Sequence[str] | None = None,
+    ) -> List[str]:
+        """
+        根据参数拼接 PyInstaller 命令
+        """
+        cmd: List[str] = [self.pyinstaller_exe, "-m", "PyInstaller", str(script_path)]
+
+        if self.onefile:
+            cmd.append("--onefile")
+        if self.windowed:
+            cmd.append("--noconsole")
+        if self.clean:
+            cmd.append("--clean")
+        if self.debug:
+            cmd.append("--debug")
+        if self.upx:
+            cmd.append("--upx-dir")
+
+        if name:
+            cmd += ["--name", name]
+        if icon:
+            cmd += ["--icon", str(icon)]
+        if version_file and sys.platform.system() == "Windows":
+            cmd += ["--version-file", str(version_file)]
+
+        _extend_arg(cmd, "--add-data", add_data)
+        _extend_arg(cmd, "--add-binary", add_binary)
+        _extend_arg(cmd, "--hidden-import", hidden_imports)
+        _extend_arg(cmd, "--runtime-hook", runtime_hooks)
+        _extend_arg(cmd, "--exclude-module", exclude_modules)
+
+        if key:
+            cmd += ["--key", key]
+
+        if dist_dir:
+            cmd += ["--distpath", str(dist_dir)]
+        if build_dir:
+            cmd += ["--workpath", str(build_dir)]
+        if workpath:
+            cmd += ["--workpath", str(workpath)]
+        if spec_path:
+            cmd += ["--specpath", str(spec_path)]
+
+        if extra_args:
+            cmd += list(extra_args)
+
+        return cmd
 
     def pack(
         self,
         script_path: str | Path,
         *,
-        icon_path: str | Path | None = None,
-        add_data: Sequence[str] | None = None,
-        output_dir: str | Path | None = None,
-        extra_args: Sequence[str] | None = None,
-    ) -> subprocess.CompletedProcess:
+        dry_run: bool = False,
+        **kwargs,
+    ):
         """
-        调用 PyInstaller 打包。
-        - script_path: 主启动脚本
-        - icon_path: ICO / PNG（PyInstaller 会自动转换）文件
-        - add_data: 额外资源，如 ["data.txt;data"]
-        - output_dir: dist 目录
+        调用 PyInstaller 执行打包；dry_run=True 时仅返回命令
         """
-        cmd = [sys.executable, "-m", "PyInstaller", str(script_path)]
-
-        if self.onefile:
-            cmd.append("--onefile")
-        if self.clean:
-            cmd.append("--clean")
-        if self.noconsole:
-            cmd.append("--noconsole")
-        if icon_path:
-            cmd += ["--icon", str(icon_path)]
-        if add_data:
-            for item in add_data:
-                cmd += ["--add-data", item]
-        if output_dir:
-            cmd += ["--distpath", str(output_dir)]
-        if extra_args:
-            cmd += list(extra_args)
-
+        cmd = self.build_cmd(script_path, **kwargs)
+        if dry_run:
+            return cmd
         return subprocess.run(cmd, check=False, capture_output=True, text=True)
 
+    # ========================  UTILITIES  ======================== #
+    @staticmethod
+    def create_version_file(
+        *,
+        company_name: str = "MyCompany",
+        file_description: str = "MyApplication",
+        file_version: str = "1.0.0.0",
+        product_name: str = "MyApplication",
+        product_version: str = "1.0.0.0",
+        outfile: str | Path = "version_info.txt",
+    ) -> Path:
+        """
+        快速生成 Windows version-file 模板；返回路径
+        """
+        content = f"""# UTF-8
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=({file_version.replace('.', ',')}),
+    prodvers=({product_version.replace('.', ',')}),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x4,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable(
+        '040904B0',
+        [StringStruct('CompanyName', '{company_name}'),
+         StringStruct('FileDescription', '{file_description}'),
+         StringStruct('FileVersion', '{file_version}'),
+         StringStruct('ProductName', '{product_name}'),
+         StringStruct('ProductVersion', '{product_version}')])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
+        path = Path(outfile).expanduser().resolve()
+        path.write_text(content, encoding="utf-8")
+        return path
+
+
+# ========================  HELPER  ======================== #
+def _extend_arg(cmd: list[str], flag: str, values: Iterable[str] | None):
+    if values:
+        for val in values:
+            cmd += [flag, str(val)]
 
 # --------------------------------------------------------------------------- #
 # 3) GUI 模块
