@@ -421,7 +421,11 @@ class AIconPackGUI(ctk.CTk):
         self.menu_style = ctk.CTkOptionMenu(frm, values=["(无模板)"] + self.icon_gen.list_templates())
         self.menu_style.grid(row=0, column=2, padx=(0, 8))
         self.menu_style.set("(无模板)")
-        self.menu_size = ctk.CTkOptionMenu(frm, values=["256x256", "512x512", "1024x1024"]); self.menu_size.set("512x512")
+        self.menu_size = ctk.CTkOptionMenu(
+            frm,
+            values=["1024x1024", "1024x1792", "1792x1024"]
+        )
+        self.menu_size.set("1024x1024")
         self.menu_size.grid(row=0, column=3, padx=(0, 16))
 
         self.btn_gen = ctk.CTkButton(frm, text="🎨 生成 Icon", width=140, command=self._start_generate)
