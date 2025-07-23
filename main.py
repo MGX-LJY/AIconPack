@@ -523,95 +523,88 @@ class AIconPackGUI(ctk.CTk):
                                         width=500, height=380, corner_radius=8)
         self.preview_lbl.grid(row=3, column=0, columnspan=5, sticky="nsew", padx=18, pady=(10, 16))
 
-    # ========== PACK PAGE (refined) ==========
+    # ========== PACK PAGE (centered) ==========
     def _build_pack_page(self):
         p = self.pack_tab
+        # ── 让列 0、2 各占空白，列 1 放表单，达到居中效果 ──
+        p.columnconfigure(0, weight=1)
+        p.columnconfigure(2, weight=1)
 
-        # ---------- 布局基准 ----------
-        p.grid_columnconfigure((0, 3), weight=1)  # 左右留白撑开
-        p.grid_columnconfigure((1, 2), weight=4)  # 中间两列主内容
+        outer = ctk.CTkFrame(p, fg_color="transparent")
+        outer.grid(row=0, column=1, sticky="n", pady=12)  # column=1 → 居中
+        outer.columnconfigure(1, weight=1)
 
         row = 0
         # 入口脚本
-        ctk.CTkLabel(p, text="入口脚本:", font=("", 14)).grid(
-            row=row, column=1, sticky="e", padx=(0, 8), pady=(22, 8))
-        self.script_ent = ctk.CTkEntry(p, placeholder_text="app.py")
-        self.script_ent.grid(row=row, column=2, sticky="ew", pady=(22, 8))
-        self.browse_btn = ctk.CTkButton(p, text="浏览", width=90, command=self._browse_script)
-        self.browse_btn.grid(row=row, column=3, sticky="w", padx=(8, 0), pady=(22, 8))
-        _set_tip(self.script_ent, "PyInstaller 打包的入口 python 文件。")
+        ctk.CTkLabel(outer, text="入口脚本:", font=("", 14)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.script_ent = ctk.CTkEntry(outer, placeholder_text="app.py")
+        self.script_ent.grid(row=row, column=1, sticky="ew", pady=8)
+        ctk.CTkButton(outer, text="浏览", width=90,
+                      command=self._browse_script).grid(row=row, column=2, sticky="w", padx=10, pady=8)
 
         # 应用名称
         row += 1
-        ctk.CTkLabel(p, text="应用名称:", font=("", 14)).grid(
-            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
-        self.name_ent = ctk.CTkEntry(p, placeholder_text="MyApp")
-        self.name_ent.grid(row=row, column=2, sticky="ew", pady=6)
-        _set_tip(self.name_ent, "生成的可执行文件名称。")
+        ctk.CTkLabel(outer, text="应用名称:", font=("", 14)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.name_ent = ctk.CTkEntry(outer, placeholder_text="MyApp")
+        self.name_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
-        # 目标平台
+        # 开关
         row += 1
-        ctk.CTkLabel(p, text="目标平台:", font=("", 14)).grid(
-            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
-        self.platform_opt = ctk.CTkOptionMenu(
-            p, values=["当前系统", "Windows", "macOS", "Linux"])
-        self.platform_opt.set("当前系统")
-        self.platform_opt.grid(row=row, column=2, sticky="w", pady=6)
-        _set_tip(self.platform_opt, "PyInstaller 仅能打包当前系统，\n选择其它仅作记录提醒。")
-
-        # ---------- 开关区 ----------
-        row += 1
-        sw_frame = ctk.CTkFrame(p, fg_color="transparent")
-        sw_frame.grid(row=row, column=1, columnspan=2, pady=(14, 8))
-        for i in range(3):
-            sw_frame.grid_columnconfigure(i, weight=1)
-
-        self.sw_one = ctk.CTkSwitch(sw_frame, text="--onefile");
-        self.sw_one.select()
-        self.sw_win = ctk.CTkSwitch(sw_frame, text="--noconsole");
-        self.sw_win.select()
-        self.sw_clean = ctk.CTkSwitch(sw_frame, text="--clean");
+        swf = ctk.CTkFrame(outer, fg_color="transparent")
+        swf.grid(row=row, column=0, columnspan=3, sticky="w", pady=10)
+        self.sw_one = ctk.CTkSwitch(swf, text="--onefile")
+        self.sw_win = ctk.CTkSwitch(swf, text="--noconsole")
+        self.sw_clean = ctk.CTkSwitch(swf, text="--clean")
+        self.sw_debug = ctk.CTkSwitch(swf, text="--debug (可选)")
+        self.sw_upx = ctk.CTkSwitch(swf, text="UPX (可选)")
+        # 第一行
+        self.sw_one.grid(row=0, column=0, padx=12, pady=4, sticky="w")
+        self.sw_win.grid(row=0, column=1, padx=12, pady=4, sticky="w")
+        self.sw_clean.grid(row=0, column=2, padx=12, pady=4, sticky="w")
+        # 第二行
+        self.sw_debug.grid(row=1, column=0, padx=12, pady=4, sticky="w")
+        self.sw_upx.grid(row=1, column=1, padx=12, pady=4, sticky="w")
+        for sw, tip in [
+            (self.sw_one, "单文件 EXE；取消则输出文件夹结构"),
+            (self.sw_win, "GUI 应用（无控制台）。CLI 程序请关闭"),
+            (self.sw_clean, "构建前清理临时文件夹"),
+            (self.sw_debug, "包含调试信息，体积更大"),
+            (self.sw_upx, "尝试使用 UPX 压缩可执行文件")
+        ]:
+            _set_tip(sw, tip)
+        self.sw_one.select();
+        self.sw_win.select();
         self.sw_clean.select()
-        self.sw_debug = ctk.CTkSwitch(sw_frame, text="--debug")
-        self.sw_upx = ctk.CTkSwitch(sw_frame, text="UPX")
 
-        # 两行排布
-        for idx, sw in enumerate((self.sw_one, self.sw_win, self.sw_clean,
-                                  self.sw_debug, self.sw_upx)):
-            r, c = divmod(idx, 3)
-            sw.grid(row=r, column=c, padx=12, pady=6, sticky="w")
-        _set_tip(self.sw_win, "勾选后为 GUI 应用；若是 CLI 程序请去掉。")
-
-        # ---------- 输出目录 ----------
+        # 输出目录
         row += 1
-        ctk.CTkLabel(p, text="输出目录(dist):").grid(
-            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
-        self.dist_ent = ctk.CTkEntry(p, placeholder_text="dist")
-        self.dist_ent.grid(row=row, column=2, sticky="ew", pady=6)
-        _set_tip(self.dist_ent, "留空使用默认 dist 目录。")
+        ctk.CTkLabel(outer, text="输出目录(dist) (可选):", font=("", 12)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.dist_ent = ctk.CTkEntry(outer, placeholder_text="dist")
+        self.dist_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
-        # ---------- 额外参数 ----------
+        # hidden-imports
         row += 1
-        ctk.CTkLabel(p, text="hidden-imports:", font=("", 12)).grid(
-            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
-        self.hidden_ent = ctk.CTkEntry(p, placeholder_text="pkg1,pkg2")
-        self.hidden_ent.grid(row=row, column=2, sticky="ew", pady=6)
-        _set_tip(self.hidden_ent, "逗号分隔，解决缺失的依赖。")
+        ctk.CTkLabel(outer, text="hidden-imports (可选):", font=("", 12)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.hidden_ent = ctk.CTkEntry(outer, placeholder_text="pkg1,pkg2")
+        self.hidden_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
+        # add-data
         row += 1
-        ctk.CTkLabel(p, text="add-data (src;dest):", font=("", 12)).grid(
-            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
-        self.data_ent = ctk.CTkEntry(p, placeholder_text="data/file.txt;data")
-        self.data_ent.grid(row=row, column=2, sticky="ew", pady=6)
-        _set_tip(self.data_ent, "分号隔源文件和包内目标路径。")
+        ctk.CTkLabel(outer, text="add-data (可选):", font=("", 12)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.data_ent = ctk.CTkEntry(outer, placeholder_text="file.txt;data")
+        self.data_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
-        # ---------- 打包按钮 ----------
+        # 打包按钮
         row += 1
-        self.pack_btn = ctk.CTkButton(p, text="📦 开始打包",
-                                      height=48, command=self._start_pack)
-        self.pack_btn.grid(row=row, column=1, columnspan=2,
-                           sticky="ew", pady=(18, 22))
-        _set_tip(self.pack_btn, "调用 PyInstaller 开始打包。")
+        self.pack_btn = ctk.CTkButton(outer, text="📦  开始打包",
+                                      height=46, command=self._start_pack)
+        self.pack_btn.grid(row=row, column=0, columnspan=3,
+                           sticky="ew", pady=18)
 
     # ---------- 生成线程 ----------
     def _start_generate(self):
