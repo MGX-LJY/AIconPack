@@ -28,7 +28,7 @@ from typing import Any, Iterable, List, Literal, Mapping, Optional, Sequence
 import customtkinter as ctk
 import requests
 from PIL import Image
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, Toplevel, Label
 from openai import OpenAI, APIConnectionError, RateLimitError
 
 # --------------------------------------------------------------------------- #
@@ -342,127 +342,144 @@ def _extend_arg(cmd: list[str], flag: str, values: Iterable[str] | None):
 # --------------------------------------------------------------------------- #
 # 3) GUI 模块
 # --------------------------------------------------------------------------- #
-# --------------------------------------------------------------
-#  全局配置文件（保存 API Key / Base URL / Prompt 模板）
-# --------------------------------------------------------------
-_CFG_PATH = Path.home() / ".aiconpack_config.json"
+# =============== 简易悬浮注解组件 ==========================================
+class _ToolTip:
+    def __init__(self, widget, text: str):
+        self.widget, self.text = widget, text
+        self.tip = None
+        widget.bind("<Enter>", self._show)
+        widget.bind("<Leave>", self._hide)
+
+    def _show(self, _e):
+        if self.tip or not self.text:
+            return
+        self.tip = Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{_e.x_root+10}+{_e.y_root+10}")
+        lbl = Label(self.tip, text=self.text, justify="left",
+                    bg="#111", fg="#fff", relief="solid", borderwidth=1,
+                    font=("Segoe UI", 9))
+        lbl.pack(ipadx=6, ipady=2)
+
+    def _hide(self, _e):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
 
 
-def _load_cfg() -> dict:
-    if _CFG_PATH.exists():
+def _set_tip(widget, text: str):
+    _ToolTip(widget, text)
+
+
+# =============== 配置文件操作 =============================================
+_CFG = Path.home() / ".aiconpack_config.json"
+def _load_cfg():  # noqa
+    if _CFG.exists():
         try:
-            return json.loads(_CFG_PATH.read_text("utf-8"))
-        except Exception:
-            pass
+            return json.loads(_CFG.read_text("utf-8"))
+        except Exception: ...
     return {"api_key": "", "base_url": "", "templates": {}}
+def _save_cfg(cfg):  # noqa
+    _CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
 
 
-def _save_cfg(cfg: dict) -> None:
-    _CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
-
-
-# --------------------------------------------------------------
-#  设置窗口
-# --------------------------------------------------------------
+# =============== 设置窗口 ===================================================
 class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, master: "AIconPackGUI", cfg: dict):
         super().__init__(master)
         self.title("设置")
-        self.geometry("520x540")
+        self.geometry("520x550")
         self.columnconfigure(0, weight=1)
         self.cfg = cfg
 
-        # API KEY
+        # API Key
         ctk.CTkLabel(self, text="OpenAI API Key:", anchor="w", font=("", 14)).grid(
             row=0, column=0, sticky="w", padx=20, pady=(22, 6))
-        self.entry_key = ctk.CTkEntry(self, placeholder_text="sk-...", show="•")
-        self.entry_key.insert(0, cfg.get("api_key", ""))
-        self.entry_key.grid(row=1, column=0, sticky="ew", padx=20)
+        self.key_ent = ctk.CTkEntry(self, placeholder_text="sk-...", show="•")
+        self.key_ent.insert(0, cfg.get("api_key", ""))
+        self.key_ent.grid(row=1, column=0, sticky="ew", padx=20)
+        _set_tip(self.key_ent, "填写你的 OpenAI 密钥。留空则无法生成图标。")
 
         # Base URL
         ctk.CTkLabel(self, text="API Base URL (可选):", anchor="w", font=("", 14)).grid(
             row=2, column=0, sticky="w", padx=20, pady=(20, 6))
-        self.entry_base = ctk.CTkEntry(self, placeholder_text="https://api.xxx.com/v1")
-        self.entry_base.insert(0, cfg.get("base_url", ""))
-        self.entry_base.grid(row=3, column=0, sticky="ew", padx=20)
+        self.base_ent = ctk.CTkEntry(self, placeholder_text="https://api.xxx.com/v1")
+        self.base_ent.insert(0, cfg.get("base_url", ""))
+        self.base_ent.grid(row=3, column=0, sticky="ew", padx=20)
+        _set_tip(self.base_ent, "若你使用代理 / 中转服务，可在此配置 Base URL。")
 
         # 模板
         ctk.CTkLabel(self, text="Prompt 模板 (JSON):", anchor="w", font=("", 14)).grid(
             row=4, column=0, sticky="w", padx=20, pady=(20, 6))
-        self.text_tpl = ctk.CTkTextbox(self, height=230)
-        self.text_tpl.insert("1.0", json.dumps(cfg.get("templates", {}), ensure_ascii=False, indent=2))
-        self.text_tpl.grid(row=5, column=0, sticky="nsew", padx=20)
+        self.tpl_txt = ctk.CTkTextbox(self, height=240)
+        self.tpl_txt.insert("1.0", json.dumps(cfg.get("templates", {}), ensure_ascii=False, indent=2))
+        self.tpl_txt.grid(row=5, column=0, sticky="nsew", padx=20)
         self.rowconfigure(5, weight=1)
+        _set_tip(self.tpl_txt, "键=模板名称，值=模板内容；使用 {prompt} 占位符。")
 
         # 按钮
-        box = ctk.CTkFrame(self, fg_color="transparent")
-        box.grid(row=6, column=0, pady=18)
+        box = ctk.CTkFrame(self, fg_color="transparent"); box.grid(row=6, column=0, pady=18)
         ctk.CTkButton(box, text="取消", width=110, command=self.destroy).grid(row=0, column=0, padx=(0, 12))
         ctk.CTkButton(box, text="保存", width=130, command=self._save).grid(row=0, column=1)
 
     def _save(self):
         try:
-            tpl = json.loads(self.text_tpl.get("1.0", "end").strip() or "{}")
-            if not isinstance(tpl, dict):
+            tpl_dict = json.loads(self.tpl_txt.get("1.0", "end").strip() or "{}")
+            if not isinstance(tpl_dict, dict):
                 raise ValueError
         except Exception:
             messagebox.showerror("错误", "模板 JSON 格式不正确")
             return
-        cfg = {
-            "api_key": self.entry_key.get().strip(),
-            "base_url": self.entry_base.get().strip(),
-            "templates": tpl,
+        conf = {
+            "api_key": self.key_ent.get().strip(),
+            "base_url": self.base_ent.get().strip(),
+            "templates": tpl_dict,
         }
-        _save_cfg(cfg)
-        self.master.apply_settings(cfg)
+        _save_cfg(conf)
+        self.master.apply_settings(conf)
         self.destroy()
 
 
-# --------------------------------------------------------------
-#  主 GUI
-# --------------------------------------------------------------
+# =============== 主 GUI =====================================================
 class AIconPackGUI(ctk.CTk):
     def __init__(self):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.title("AIconPack · AI 图标生成 & PyInstaller 打包")
-        self.geometry("960x700")
-        self.minsize(860, 620)
+        self.geometry("980x720")
+        self.minsize(880, 640)
 
-        # ---------- 服务 ----------
+        # 服务
         self.cfg = _load_cfg()
         self._init_services()
 
-        # ---------- 顶部分段按钮 Tab ----------
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
-        self.tabs = ctk.CTkTabview(self, segmented_button_fg_color="#161616")
-        self.tabs.grid(row=1, column=0, sticky="nsew", padx=14, pady=10)
+        # 顶部
+        top = ctk.CTkFrame(self, fg_color="transparent")
+        top.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 4))
+        top.columnconfigure(0, weight=1)
+        ctk.CTkLabel(top, text="🪄 AIconPack", font=("Segoe UI", 28, "bold")).grid(row=0, column=0, sticky="w")
+        ctk.CTkButton(top, text="⚙️ 设置", width=100,
+                      command=lambda: SettingsDialog(self, self.cfg)).grid(row=0, column=1, sticky="e")
+
+        # Tab
+        self.columnconfigure(0, weight=1); self.rowconfigure(1, weight=1)
+        self.tabs = ctk.CTkTabview(self); self.tabs.grid(row=1, column=0, sticky="nsew", padx=14, pady=12)
         self.ai_tab = self.tabs.add("AI 生成")
         self.pack_tab = self.tabs.add("PyInstaller 打包")
 
-        # ---------- 头部 ----------
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 4))
-        header.columnconfigure(0, weight=1)
-        ctk.CTkLabel(header, text="🪄  AIconPack", font=("Segoe UI", 28, "bold")).grid(
-            row=0, column=0, sticky="w")
-        ctk.CTkButton(header, text="⚙️ 设置", width=100,
-                      command=lambda: SettingsDialog(self, self.cfg)).grid(row=0, column=1, sticky="e")
-
-        # ---------- 状态栏 ----------
+        # 状态栏
         self.status = ctk.CTkLabel(self, text="状态: 就绪", anchor="w")
-        self.status.grid(row=2, column=0, sticky="ew", padx=20, pady=(2, 10))
+        self.status.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
 
-        # ---------- 页面构建 ----------
-        self._build_ai_page(self.ai_tab)
-        self._build_pack_page(self.pack_tab)
+        # 页面
+        self._build_ai_page()
+        self._build_pack_page()
 
-        # ---------- 运行状态 ----------
+        # 运行态
         self.generated_icon: Path | None = None
-        self.preview_image_obj = None
+        self.preview_img = None
 
-    # ===== 服务初始化 =====
+    # ---------- 服务 ----------
     def _init_services(self):
         self.icon_gen = IconGenerator(
             api_key=self.cfg.get("api_key"),
@@ -470,131 +487,171 @@ class AIconPackGUI(ctk.CTk):
             prompt_templates=self.cfg.get("templates"),
         )
 
-    # ---------------------------------------------------------- #
-    #  AI Page
-    # ---------------------------------------------------------- #
-    def _build_ai_page(self, parent):
-        parent.columnconfigure(1, weight=1)
-        parent.rowconfigure(3, weight=1)
+    # ========== AI PAGE ==========
+    def _build_ai_page(self):
+        p = self.ai_tab
+        p.columnconfigure(1, weight=1); p.rowconfigure(3, weight=1)
 
         # Prompt
-        ctk.CTkLabel(parent, text="Icon Prompt:", font=("", 14)).grid(
-            row=0, column=0, padx=(18, 10), pady=(16, 6), sticky="e")
-        self.entry_prompt = ctk.CTkEntry(parent, placeholder_text="如: 极简扁平风蓝色日历应用图标")
-        self.entry_prompt.grid(row=0, column=1, columnspan=3, sticky="ew", padx=(0, 16), pady=(16, 6))
+        ctk.CTkLabel(p, text="Prompt:", font=("", 14)).grid(row=0, column=0, padx=(18, 10), pady=(16, 6), sticky="e")
+        self.prompt_ent = ctk.CTkEntry(p, placeholder_text="极简扁平风蓝色日历图标")
+        self.prompt_ent.grid(row=0, column=1, columnspan=4, sticky="ew", padx=(0, 18), pady=(16, 6))
+        _set_tip(self.prompt_ent, "图标描述文字，将送入 GPT / DALL·E。")
 
-        # 模板 + 尺寸 + 压缩
-        self.menu_style = ctk.CTkOptionMenu(parent, values=["(无模板)"] + self.icon_gen.list_templates())
-        self.menu_style.set("(无模板)")
-        self.menu_style.grid(row=1, column=0, padx=(18, 10), pady=4)
+        # 模板 + 尺寸
+        self.style_opt = ctk.CTkOptionMenu(p, values=["(无模板)"] + self.icon_gen.list_templates())
+        self.style_opt.set("(无模板)")
+        self.style_opt.grid(row=1, column=0, padx=(18, 10), pady=4)
+        _set_tip(self.style_opt, "选择预设 Prompt 模板。")
 
-        self.menu_size = ctk.CTkOptionMenu(
-            parent, values=["1024x1024", "1024x1792", "1792x1024"]
-        )
-        self.menu_size.set("1024x1024")
-        self.menu_size.grid(row=1, column=1, sticky="w", padx=(0, 16), pady=4)
+        self.size_opt = ctk.CTkOptionMenu(p, values=["1024x1024", "1024x1792", "1792x1024"])
+        self.size_opt.set("1024x1024")
+        self.size_opt.grid(row=1, column=1, padx=(0, 16), pady=4, sticky="w")
+        _set_tip(self.size_opt, "DALL·E 3 仅支持这三种尺寸。")
 
-        ctk.CTkLabel(parent, text="PNG 压缩(0-9):").grid(row=1, column=2, padx=(0, 6), pady=4, sticky="e")
-        self.slider_comp = ctk.CTkSlider(parent, from_=0, to=9, number_of_steps=9, width=140)
-        self.slider_comp.set(6)
-        self.slider_comp.grid(row=1, column=3, padx=(0, 16), pady=4)
+        # 压缩
+        ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(row=1, column=2, sticky="e", padx=(0, 6))
+        self.comp_slider = ctk.CTkSlider(p, from_=0, to=9, number_of_steps=9, width=140); self.comp_slider.set(6)
+        self.comp_slider.grid(row=1, column=3, padx=(0, 16)); _set_tip(self.comp_slider, "0=无压缩，9=最小体积。")
 
         # 生成按钮
-        self.btn_gen = ctk.CTkButton(parent, text="🎨 生成 Icon", width=150, command=self._start_generate)
-        self.btn_gen.grid(row=1, column=4, padx=(0, 18), pady=4)
+        self.gen_btn = ctk.CTkButton(p, text="🎨 生成", width=130, command=self._start_generate)
+        self.gen_btn.grid(row=1, column=4, padx=(0, 18)); _set_tip(self.gen_btn, "调用 OpenAI 生成图标。")
 
         # 预览
-        self.lbl_preview = ctk.CTkLabel(parent, text="预览区域", fg_color="#1a1a1a",
-                                        width=480, height=380, corner_radius=8)
-        self.lbl_preview.grid(row=3, column=0, columnspan=5, sticky="nsew",
-                              padx=18, pady=(10, 16))
+        self.preview_lbl = ctk.CTkLabel(p, text="预览区域", fg_color="#151515",
+                                        width=500, height=380, corner_radius=8)
+        self.preview_lbl.grid(row=3, column=0, columnspan=5, sticky="nsew", padx=18, pady=(10, 16))
 
-    # ---------------------------------------------------------- #
-    #  Pack Page
-    # ---------------------------------------------------------- #
-    def _build_pack_page(self, parent):
-        parent.columnconfigure(1, weight=1)
+    # ========== PACK PAGE (refined) ==========
+    def _build_pack_page(self):
+        p = self.pack_tab
 
-        # 主脚本
-        ctk.CTkLabel(parent, text="入口脚本:", font=("", 14)).grid(
-            row=0, column=0, padx=(18, 10), pady=(18, 6), sticky="e")
-        self.entry_script = ctk.CTkEntry(parent, placeholder_text="main.py")
-        self.entry_script.grid(row=0, column=1, sticky="ew", padx=(0, 10), pady=(18, 6))
-        ctk.CTkButton(parent, text="浏览", width=90, command=self._browse_script).grid(
-            row=0, column=2, padx=(0, 18), pady=(18, 6))
+        # ---------- 布局基准 ----------
+        p.grid_columnconfigure((0, 3), weight=1)  # 左右留白撑开
+        p.grid_columnconfigure((1, 2), weight=4)  # 中间两列主内容
 
-        # 开关区
-        opt = ctk.CTkFrame(parent, fg_color="transparent")
-        opt.grid(row=1, column=0, columnspan=3, sticky="w", padx=18, pady=6)
-        self.sw_onefile = ctk.CTkSwitch(opt, text="--onefile"); self.sw_onefile.select()
-        self.sw_win     = ctk.CTkSwitch(opt, text="--noconsole"); self.sw_win.select()
-        self.sw_clean   = ctk.CTkSwitch(opt, text="--clean"); self.sw_clean.select()
-        self.sw_debug   = ctk.CTkSwitch(opt, text="--debug")
-        self.sw_upx     = ctk.CTkSwitch(opt, text="UPX")
-        for i, s in enumerate((self.sw_onefile, self.sw_win, self.sw_clean, self.sw_debug, self.sw_upx)):
-            s.grid(row=0, column=i, padx=12)
+        row = 0
+        # 入口脚本
+        ctk.CTkLabel(p, text="入口脚本:", font=("", 14)).grid(
+            row=row, column=1, sticky="e", padx=(0, 8), pady=(22, 8))
+        self.script_ent = ctk.CTkEntry(p, placeholder_text="app.py")
+        self.script_ent.grid(row=row, column=2, sticky="ew", pady=(22, 8))
+        self.browse_btn = ctk.CTkButton(p, text="浏览", width=90, command=self._browse_script)
+        self.browse_btn.grid(row=row, column=3, sticky="w", padx=(8, 0), pady=(22, 8))
+        _set_tip(self.script_ent, "PyInstaller 打包的入口 python 文件。")
 
-        # dist 输出目录
-        ctk.CTkLabel(parent, text="输出目录(dist):").grid(row=2, column=0, padx=(18, 10), pady=6, sticky="e")
-        self.entry_dist = ctk.CTkEntry(parent, placeholder_text="dist")
-        self.entry_dist.grid(row=2, column=1, sticky="ew", padx=(0, 10), pady=6)
+        # 应用名称
+        row += 1
+        ctk.CTkLabel(p, text="应用名称:", font=("", 14)).grid(
+            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
+        self.name_ent = ctk.CTkEntry(p, placeholder_text="MyApp")
+        self.name_ent.grid(row=row, column=2, sticky="ew", pady=6)
+        _set_tip(self.name_ent, "生成的可执行文件名称。")
 
-        # 打包按钮
-        self.btn_pack = ctk.CTkButton(parent, text="📦 开始打包", height=44, command=self._start_pack)
-        self.btn_pack.grid(row=3, column=0, columnspan=3, sticky="ew", padx=18, pady=(10, 16))
+        # 目标平台
+        row += 1
+        ctk.CTkLabel(p, text="目标平台:", font=("", 14)).grid(
+            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
+        self.platform_opt = ctk.CTkOptionMenu(
+            p, values=["当前系统", "Windows", "macOS", "Linux"])
+        self.platform_opt.set("当前系统")
+        self.platform_opt.grid(row=row, column=2, sticky="w", pady=6)
+        _set_tip(self.platform_opt, "PyInstaller 仅能打包当前系统，\n选择其它仅作记录提醒。")
 
-    # ========================================================== #
-    #   事件 —— AI 生成
-    # ========================================================== #
+        # ---------- 开关区 ----------
+        row += 1
+        sw_frame = ctk.CTkFrame(p, fg_color="transparent")
+        sw_frame.grid(row=row, column=1, columnspan=2, pady=(14, 8))
+        for i in range(3):
+            sw_frame.grid_columnconfigure(i, weight=1)
+
+        self.sw_one = ctk.CTkSwitch(sw_frame, text="--onefile");
+        self.sw_one.select()
+        self.sw_win = ctk.CTkSwitch(sw_frame, text="--noconsole");
+        self.sw_win.select()
+        self.sw_clean = ctk.CTkSwitch(sw_frame, text="--clean");
+        self.sw_clean.select()
+        self.sw_debug = ctk.CTkSwitch(sw_frame, text="--debug")
+        self.sw_upx = ctk.CTkSwitch(sw_frame, text="UPX")
+
+        # 两行排布
+        for idx, sw in enumerate((self.sw_one, self.sw_win, self.sw_clean,
+                                  self.sw_debug, self.sw_upx)):
+            r, c = divmod(idx, 3)
+            sw.grid(row=r, column=c, padx=12, pady=6, sticky="w")
+        _set_tip(self.sw_win, "勾选后为 GUI 应用；若是 CLI 程序请去掉。")
+
+        # ---------- 输出目录 ----------
+        row += 1
+        ctk.CTkLabel(p, text="输出目录(dist):").grid(
+            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
+        self.dist_ent = ctk.CTkEntry(p, placeholder_text="dist")
+        self.dist_ent.grid(row=row, column=2, sticky="ew", pady=6)
+        _set_tip(self.dist_ent, "留空使用默认 dist 目录。")
+
+        # ---------- 额外参数 ----------
+        row += 1
+        ctk.CTkLabel(p, text="hidden-imports:", font=("", 12)).grid(
+            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
+        self.hidden_ent = ctk.CTkEntry(p, placeholder_text="pkg1,pkg2")
+        self.hidden_ent.grid(row=row, column=2, sticky="ew", pady=6)
+        _set_tip(self.hidden_ent, "逗号分隔，解决缺失的依赖。")
+
+        row += 1
+        ctk.CTkLabel(p, text="add-data (src;dest):", font=("", 12)).grid(
+            row=row, column=1, sticky="e", padx=(0, 8), pady=6)
+        self.data_ent = ctk.CTkEntry(p, placeholder_text="data/file.txt;data")
+        self.data_ent.grid(row=row, column=2, sticky="ew", pady=6)
+        _set_tip(self.data_ent, "分号隔源文件和包内目标路径。")
+
+        # ---------- 打包按钮 ----------
+        row += 1
+        self.pack_btn = ctk.CTkButton(p, text="📦 开始打包",
+                                      height=48, command=self._start_pack)
+        self.pack_btn.grid(row=row, column=1, columnspan=2,
+                           sticky="ew", pady=(18, 22))
+        _set_tip(self.pack_btn, "调用 PyInstaller 开始打包。")
+
+    # ---------- 生成线程 ----------
     def _start_generate(self):
-        prompt = self.entry_prompt.get().strip()
+        prompt = self.prompt_ent.get().strip()
         if not prompt:
             messagebox.showwarning("提示", "请输入 Prompt")
             return
-        style = None if self.menu_style.get() == "(无模板)" else self.menu_style.get()
-        size = self.menu_size.get()
-        comp_lvl = int(self.slider_comp.get())
+        style = None if self.style_opt.get() == "(无模板)" else self.style_opt.get()
+        size = self.size_opt.get()
+        comp = int(self.comp_slider.get())
 
-        self.btn_gen.configure(state="disabled")
-        self._status("开始生成 Icon…")
-        threading.Thread(
-            target=self._gen_thread,
-            args=(prompt, style, size, comp_lvl),
-            daemon=True
-        ).start()
+        self.gen_btn.configure(state="disabled")
+        self._status("生成中…")
+        threading.Thread(target=self._gen_thread, args=(prompt, style, size, comp), daemon=True).start()
 
-    def _gen_thread(self, prompt, style, size, comp_lvl):
+    def _gen_thread(self, prompt, style, size, comp):
         try:
-            path = self.icon_gen.generate(
-                prompt, style=style, size=size,
-                compress_level=comp_lvl,
-                convert_to_ico=True
-            )[0]
-            self.generated_icon = path
-            img = Image.open(path)
+            icon_path = self.icon_gen.generate(prompt, style=style, size=size,
+                                               compress_level=comp, convert_to_ico=True)[0]
+            self.generated_icon = icon_path
+            img = Image.open(icon_path)
             cimg = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
-            self.after(0, lambda: self._preview(cimg))
+            self.after(0, lambda: self._show_preview(cimg))
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
         finally:
-            self.after(0, lambda: self.btn_gen.configure(state="normal"))
+            self.after(0, lambda: self.gen_btn.configure(state="normal"))
 
-    def _preview(self, ctk_img):
-        self.lbl_preview.configure(image=ctk_img, text="")
-        self.preview_image_obj = ctk_img
-        self._status("Icon 生成完成")
+    def _show_preview(self, cimg):
+        self.preview_lbl.configure(image=cimg, text=""); self.preview_img = cimg
+        self._status("生成完成，可前往『打包』页")
 
-    # ========================================================== #
-    #   事件 —— 打包
-    # ========================================================== #
+    # ---------- 打包线程 ----------
     def _browse_script(self):
         p = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
         if p:
-            self.entry_script.delete(0, "end")
-            self.entry_script.insert(0, p)
+            self.script_ent.delete(0, "end"); self.script_ent.insert(0, p)
 
     def _start_pack(self):
-        script = self.entry_script.get().strip()
+        script = self.script_ent.get().strip()
         if not script or not Path(script).exists():
             messagebox.showerror("错误", "请选择有效的入口脚本")
             return
@@ -602,13 +659,13 @@ class AIconPackGUI(ctk.CTk):
             messagebox.showwarning("提示", "请先生成 Icon")
             return
 
-        self.btn_pack.configure(state="disabled")
+        self.pack_btn.configure(state="disabled")
         self._status("开始打包…")
         threading.Thread(target=self._pack_thread, args=(script,), daemon=True).start()
 
     def _pack_thread(self, script):
         packer = PyInstallerPacker(
-            onefile=self.sw_onefile.get(),
+            onefile=self.sw_one.get(),
             windowed=self.sw_win.get(),
             clean=self.sw_clean.get(),
             debug=self.sw_debug.get(),
@@ -617,199 +674,29 @@ class AIconPackGUI(ctk.CTk):
         try:
             result = packer.pack(
                 script_path=script,
-                name=Path(script).stem,
+                name=self.name_ent.get().strip() or Path(script).stem,
                 icon=self.generated_icon,
-                dist_dir=self.entry_dist.get().strip() or None
+                dist_dir=self.dist_ent.get().strip() or None,
+                hidden_imports=[x.strip() for x in self.hidden_ent.get().split(",") if x.strip()] or None,
+                add_data=[self.data_ent.get().strip()] if self.data_ent.get().strip() else None
             )
             Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, "utf-8")
-            msg = "打包成功！" if result.returncode == 0 else "打包失败！查看 pack_log.txt"
-            self.after(0, lambda: self._status(msg))
+            ok = result.returncode == 0
+            txt = "打包成功！" if ok else "打包失败！查看 pack_log.txt"
+            self.after(0, lambda: self._status(txt))
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
         finally:
-            self.after(0, lambda: self.btn_pack.configure(state="normal"))
+            self.after(0, lambda: self.pack_btn.configure(state="normal"))
 
-    # ----------------------------------------------------------
+    # ---------- 设置 & 状态 ----------
     def apply_settings(self, cfg: dict):
-        self.cfg = cfg
-        self._init_services()
-        self.menu_style.configure(values=["(无模板)"] + self.icon_gen.list_templates())
-        self.menu_style.set("(无模板)")
-        self._status("配置已保存")
+        self.cfg = cfg; self._init_services()
+        self.style_opt.configure(values=["(无模板)"] + self.icon_gen.list_templates())
+        self.style_opt.set("(无模板)")
+        self._status("已加载新配置")
 
-    def _status(self, txt: str):
-        self.status.configure(text=f"状态: {txt}")
-    # ----- Services -----
-    def _init_services(self):
-        self.icon_gen = IconGenerator(
-            api_key=self.cfg.get("api_key"),
-            base_url=self.cfg.get("base_url"),
-            prompt_templates=self.cfg.get("templates"),
-        )
-
-    # ----- Header -----
-    def _header(self):
-        hdr = ctk.CTkFrame(self, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="ew", padx=20, pady=(18, 6))
-        hdr.columnconfigure(0, weight=1)
-        ctk.CTkLabel(hdr, text="🪄  AIconPack", font=("Segoe UI", 28, "bold")).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(hdr, text="⚙️ 设置", width=90, command=self._open_settings).grid(row=0, column=1, sticky="e")
-
-    # ----- Script frame -----
-    def _script_frame(self):
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.grid(row=1, column=0, padx=20, pady=(4, 6), sticky="ew")
-        frm.columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(frm, text="主脚本:", font=("", 14)).grid(row=0, column=0, padx=(16, 8), pady=16)
-        self.entry_script = ctk.CTkEntry(frm, placeholder_text="请选择要打包的 *.py")
-        self.entry_script.grid(row=0, column=1, sticky="ew", pady=16)
-        ctk.CTkButton(frm, text="浏览", width=80, command=self._browse_script).grid(row=0, column=2, padx=(10, 16))
-
-        sw = ctk.CTkFrame(frm, fg_color="transparent")
-        sw.grid(row=1, column=0, columnspan=3, sticky="w", padx=14, pady=(0, 14))
-        self.opt_onefile = ctk.CTkSwitch(sw, text="单文件 (--onefile)");      self.opt_onefile.select()
-        self.opt_win     = ctk.CTkSwitch(sw, text="窗口模式 (--noconsole)");  self.opt_win.select()
-        self.opt_clean   = ctk.CTkSwitch(sw, text="清理临时 (--clean)");      self.opt_clean.select()
-        self.opt_debug   = ctk.CTkSwitch(sw, text="调试信息 (--debug)")
-        for i, s in enumerate((self.opt_onefile, self.opt_win, self.opt_clean, self.opt_debug)):
-            s.grid(row=0, column=i, padx=(0, 22))
-
-    # ----- Prompt frame -----
-    def _prompt_frame(self):
-        frm = ctk.CTkFrame(self, corner_radius=12)
-        frm.grid(row=2, column=0, padx=20, pady=(4, 0), sticky="nsew")
-        frm.columnconfigure(1, weight=1); frm.rowconfigure(1, weight=1)
-
-        ctk.CTkLabel(frm, text="Icon Prompt:", font=("", 14)).grid(row=0, column=0, padx=(16, 8), pady=(16, 10), sticky="w")
-        self.entry_prompt = ctk.CTkEntry(frm, placeholder_text="如: 极简扁平风蓝色日历应用图标")
-        self.entry_prompt.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(16, 10))
-
-        self.menu_style = ctk.CTkOptionMenu(frm, values=["(无模板)"] + self.icon_gen.list_templates())
-        self.menu_style.grid(row=0, column=2, padx=(0, 8))
-        self.menu_style.set("(无模板)")
-        self.menu_size = ctk.CTkOptionMenu(
-            frm,
-            values=["1024x1024", "1024x1792", "1792x1024"]
-        )
-        self.menu_size.set("1024x1024")
-        self.menu_size.grid(row=0, column=3, padx=(0, 16))
-
-        self.btn_gen = ctk.CTkButton(frm, text="🎨 生成 Icon", width=140, command=self._start_generate)
-        self.btn_gen.grid(row=0, column=4, padx=(4, 16))
-
-        self.lbl_preview = ctk.CTkLabel(frm, text="预览区", width=480, height=360, corner_radius=8, fg_color="#1a1a1a")
-        self.lbl_preview.grid(row=1, column=0, columnspan=5, sticky="nsew", padx=16, pady=(0, 16))
-
-    # ----- Bottom -----
-    def _bottom(self):
-        frm = ctk.CTkFrame(self, fg_color="transparent")
-        frm.grid(row=3, column=0, padx=20, pady=12, sticky="ew")
-        frm.columnconfigure(0, weight=1)
-
-        self.btn_pack = ctk.CTkButton(frm, text="📦 打包应用", height=44, state="disabled", command=self._start_pack)
-        self.btn_pack.grid(row=0, column=0, sticky="ew")
-        self.bar = ctk.CTkProgressBar(frm, mode="indeterminate"); self.bar.stop()
-        self.bar.grid(row=1, column=0, sticky="ew", pady=(10, 4))
-        self.lbl_status = ctk.CTkLabel(frm, text="状态: 就绪", anchor="w"); self.lbl_status.grid(row=2, column=0, sticky="w")
-
-    # =================================================================== #
-    #   SETTINGS
-    # =================================================================== #
-    def _open_settings(self):
-        SettingsDialog(self, self.cfg)
-
-    def apply_settings(self, cfg: dict):
-        self.cfg = cfg
-        self._init_services()
-        self.menu_style.configure(values=["(无模板)"] + self.icon_gen.list_templates())
-        self.menu_style.set("(无模板)")
-        self._status("配置已更新")
-
-    # =================================================================== #
-    #   EVENTS
-    # =================================================================== #
-    def _browse_script(self):
-        f = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
-        if f:
-            self.entry_script.delete(0, "end"); self.entry_script.insert(0, f)
-
-    # ---- Generate icon
-    def _start_generate(self):
-        prompt = self.entry_prompt.get().strip()
-        if not prompt:
-            messagebox.showwarning("提示", "请输入 Icon Prompt")
-            return
-        style = None if self.menu_style.get() == "(无模板)" else self.menu_style.get()
-        size = self.menu_size.get()
-
-        self.btn_gen.configure(state="disabled"); self.btn_pack.configure(state="disabled")
-        self.bar.start(); self._status("正在生成 Icon…")
-        threading.Thread(target=self._gen_thread, args=(prompt, style, size), daemon=True).start()
-
-    def _gen_thread(self, prompt, style, size):
-        try:
-            path = self.icon_gen.generate(
-                prompt,
-                style=style,
-                size=size,
-                convert_to_ico=True
-            )[0]
-            self.generated_icon = path
-            img = Image.open(path)
-            ctk_img = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
-            self.after(0, lambda: self._preview(ctk_img))
-        except Exception as e:
-            # ★ 捕获 e
-            self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
-        finally:
-            self.after(0, lambda: self.btn_gen.configure(state="normal"))
-            self.after(0, self.bar.stop)
-
-    def _preview(self, ctk_img):
-        self.lbl_preview.configure(image=ctk_img, text=""); self.preview_img = ctk_img
-        self.btn_pack.configure(state="normal")
-        self._status("Icon 已生成，准备打包")
-
-    # ---- Pack
-    def _start_pack(self):
-        script = self.entry_script.get().strip()
-        if not script or not Path(script).exists():
-            messagebox.showerror("错误", "请先选择有效脚本")
-            return
-        if not self.generated_icon:
-            messagebox.showwarning("提示", "请先生成 Icon")
-            return
-
-        self.btn_pack.configure(state="disabled"); self.bar.start(); self._status("正在打包…")
-        threading.Thread(target=self._pack_thread, args=(script,), daemon=True).start()
-
-    def _pack_thread(self, script):
-        packer = PyInstallerPacker(
-            onefile=self.opt_onefile.get(),
-            windowed=self.opt_win.get(),
-            clean=self.opt_clean.get(),
-            debug=self.opt_debug.get(),
-        )
-        try:
-            result = packer.pack(
-                script_path=script,
-                name=Path(script).stem,
-                icon=self.generated_icon
-            )
-            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, "utf-8")
-            msg = "打包成功！dist/ 已生成" if result.returncode == 0 else "打包失败！查看 pack_log.txt"
-            self.after(0, lambda: self._status(msg))
-        except Exception as e:
-            # ★ 捕获 e
-            self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
-        finally:
-            self.after(0, lambda: self.btn_pack.configure(state="normal"))
-            self.after(0, self.bar.stop)
-    # ---- Status
-    def _status(self, txt: str):
-        self.lbl_status.configure(text=f"状态: {txt}")
-
+    def _status(self, text): self.status.configure(text=f"状态: {text}")
 
 # --------------------------------------------------------------------------- #
 # 入口
