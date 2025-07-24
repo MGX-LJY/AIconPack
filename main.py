@@ -339,46 +339,6 @@ def _extend_arg(cmd: list[str], flag: str, values: Iterable[str] | None):
         for v in values:
             cmd += [flag, str(v)]
 
-def _smooth_icon(self):
-    """对已生成的 PNG 做圆角/圆形裁切并刷新预览"""
-    if not self.generated_icon or not Path(self.generated_icon).exists():
-        messagebox.showwarning("提示", "请先生成图标")
-        return
-
-    img = Image.open(self.generated_icon).convert("RGBA")
-    w, h = img.size
-    radius = int(min(w, h) * 0.25)  # 25% 圆角
-
-    # 创建圆角遮罩
-    mask = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(mask)
-    draw.rounded_rectangle((0, 0, w, h), radius=radius, fill=255)
-
-    img.putalpha(mask)
-
-    rounded_path = Path(self.generated_icon).with_stem(
-        Path(self.generated_icon).stem + "_round")
-    img.save(rounded_path, format="PNG")
-
-    self.generated_icon = rounded_path  # 更新路径
-    cimg = ctk.CTkImage(img, size=(min(420, w), min(420, h)))
-    self.preview_img = cimg
-    self.preview_lbl.configure(image=cimg, text="")
-    self._status("已生成圆润版本")
-
-def _browse_icon(self):
-    p = filedialog.askopenfilename(filetypes=[("Icon files", "*.ico *.png")])
-    if p:
-        self.icon_ent.delete(0, "end")
-        self.icon_ent.insert(0, p)
-
-def _use_generated_icon(self):
-    if not self.generated_icon:
-        messagebox.showwarning("提示", "尚未生成图标")
-        return
-    self.icon_ent.delete(0, "end")
-    self.icon_ent.insert(0, str(self.generated_icon))
-
 # --------------------------------------------------------------------------- #
 # 3) GUI 模块
 # --------------------------------------------------------------------------- #
@@ -796,9 +756,53 @@ class AIconPackGUI(ctk.CTk):
 
     def _status(self, text): self.status.configure(text=f"状态: {text}")
 
+# ---------- 额外工具 ----------
+def _smooth_icon(self):
+    """对已生成 PNG 做 25% 圆角裁切并刷新预览"""
+    if not self.generated_icon or not Path(self.generated_icon).exists():
+        messagebox.showwarning("提示", "请先生成图标")
+        return
+
+    img = Image.open(self.generated_icon).convert("RGBA")
+    w, h = img.size
+    radius = int(min(w, h) * 0.25)
+
+    mask = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, w, h), radius=radius, fill=255)
+
+    img.putalpha(mask)
+
+    rounded_path = Path(self.generated_icon).with_stem(
+        Path(self.generated_icon).stem + "_round")
+    img.save(rounded_path, format="PNG")
+
+    self.generated_icon = rounded_path
+    cimg = ctk.CTkImage(img, size=(min(420, w), min(420, h)))
+    self.preview_img = cimg
+    self.preview_lbl.configure(image=cimg, text="")
+    self._status("已生成圆润版本")
+
+def _browse_icon(self):
+    """手动选择 .ico / .png 作为打包图标"""
+    p = filedialog.askopenfilename(
+        filetypes=[("Icon files", "*.ico *.png")])
+    if p:
+        self.icon_ent.delete(0, "end")
+        self.icon_ent.insert(0, p)
+
+def _use_generated_icon(self):
+    """把最新生成的图标填入图标输入框"""
+    if not self.generated_icon:
+        messagebox.showwarning("提示", "尚未生成图标")
+        return
+    self.icon_ent.delete(0, "end")
+    self.icon_ent.insert(0, str(self.generated_icon))
+
 # --------------------------------------------------------------------------- #
 # 入口
 # --------------------------------------------------------------------------- #
+
 if __name__ == "__main__":
     try:
         AIconPackGUI().mainloop()
