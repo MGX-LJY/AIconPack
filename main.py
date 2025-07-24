@@ -836,49 +836,88 @@ class AIconPackGUI(ctk.CTk):
 
         return sorted(pkgs)
 
+    # ---------- 依赖扫描辅助 ----------
+    def _collect_project_files(self, entry: Path, max_bytes: int = 100_000) -> str:
+        """
+        搜索入口脚本所在目录（含子目录）的所有 .py 文件，拼成单个字符串。
+        若总体积 > max_bytes，仅均匀采样拼接，保证 GPT 输入上限。
+        """
+        root = entry.parent
+        py_files = sorted(p for p in root.rglob("*.py") if p.is_file())
+        pieces, total = [], 0
+        for p in py_files:
+            code = p.read_text(encoding="utf-8", errors="ignore")
+            if total + len(code) > max_bytes:  # 超限则采样剩余空间
+                need = max_bytes - total
+                if need > 0:
+                    pieces.append(code[:need])
+                    total += need
+                break
+            pieces.append(code)
+            total += len(code)
+        return "\n\n# ===== file separator =====\n\n".join(pieces)
+
     def _detect_dependencies_ai(self, script: str) -> list[str]:
         """
-        使用 OpenAI GPT 模型分析脚本依赖，生成包名列表并写入
-        requirements.txt；失败时回落到静态正则解析。
+        ► 改进版本：扫描整个工程 & 双轮 GPT 验证
         """
         fallback = self._detect_dependencies(script)
         try:
-            code_text = Path(script).read_text(encoding="utf-8")[:15000]
-        except Exception as e:
-            self._status(f"读取脚本失败，使用静态分析: {e}")
+            full_code = self._collect_project_files(Path(script))
+        except Exception as exc:
+            self._status(f"读取源码失败，使用静态分析: {exc}")
             self._write_requirements(fallback)
             return fallback
 
+        # --- 懒加载 GPT 客户端 ---
         if self._chat_client is None:
             self._chat_client = OpenAI(
                 api_key=self.cfg.get("api_key"),
                 base_url=self.cfg.get("base_url") or None,
-                timeout=60,
+                timeout=90,
             )
 
-        system_msg = (
-            "你是资深 Python 打包专家。请阅读用户给出的代码，并输出它运行所需在 "
-            "PyPI 可直接安装的第三方依赖包列表（只给包名，无版本号，按逗号分隔）。"
-            "标准库和相对导入请忽略。常见别名需映射到真实包名，例如 PIL→Pillow、"
-            "cv2→opencv-python、Crypto→pycryptodome。"
+        system_prompt = (
+            "你是资深 Python 打包专家。请从用户给出的『完整项目源码』中，提取所有必须在 "
+            "PyPI 安装的第三方依赖包名（忽略标准库/相对导入），仅输出用英文逗号分隔的包列表；"
+            "常见别名需映射为真实包名，例如 PIL→Pillow, cv2→opencv-python, Crypto→pycryptodome。"
         )
-
         try:
-            rsp = self._chat_client.chat.completions.create(
+            # —— 第一轮：初筛 ——
+            reply1 = self._chat_client.chat.completions.create(
                 model=self.chat_model,
                 messages=[
-                    {"role": "system", "content": system_msg},
-                    {"role": "user", "content": code_text},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": full_code},
                 ],
-                temperature=0.1,
+                max_tokens=300,
+                temperature=0,
+            ).choices[0].message.content.strip()
+
+            # —— 第二轮：确认 ——
+            confirm_prompt = (
+                f"请再检查一遍源码，确认下面列表是否缺包或有误：\n{reply1}\n"
+                "如需补充或删除，请给出新的最终列表（同样逗号分隔）；若无改动写 '#OK'。"
             )
-            reply = rsp.choices[0].message.content.strip()
-            pkgs = {re.split(r"[,\s]+", p)[0] for p in reply.split(",") if p.strip()}
-            pkgs = sorted(x for x in pkgs if x)       # 过滤空字符串
+            reply2 = self._chat_client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": confirm_prompt},
+                ],
+                max_tokens=300,
+                temperature=0,
+            ).choices[0].message.content.strip()
+
+            raw = reply2 if reply2.upper() != "OK" else reply1
+            pkgs = {re.split(r"[,\s]+", p)[0] for p in raw.split(",") if p.strip()}
+            # 与静态结果并集
+            pkgs |= set(fallback)
+            pkgs = sorted(pkgs)
             self._write_requirements(pkgs)
-            return pkgs if pkgs else fallback
-        except Exception as e:
-            self._status(f"AI 依赖分析失败，使用静态分析: {e}")
+            return pkgs
+        except Exception as exc:
+            self._status(f"AI 依赖分析失败，使用静态分析: {exc}")
             self._write_requirements(fallback)
             return fallback
 
@@ -951,15 +990,24 @@ class AIconPackGUI(ctk.CTk):
         """
         1) 使用 GPT 分析依赖 → requirements.txt
         2) 创建临时 venv (.aipack_venv)
-        3) pip install -r requirements.txt
+        3) pip install -r requirements.txt  (+ Pillow if macOS+PNG icon)
         4) 用 venv/python 调 PyInstaller
         """
         venv_dir = Path(".aipack_venv")
-        python_exe = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        python_exe = venv_dir / ("Scripts/python.exe" if os.name == "nt"
+                                 else "bin/python")
         try:
-            # ── 1. 解析依赖 ─────────────────────────
+            # ── 1. 依赖解析 ─────────────────────────
             pkgs = self._detect_dependencies_ai(script)
-            pkgs = [p for p in pkgs if p]        # 再保险过滤空包名
+            pkgs = [p for p in pkgs if p]           # 过滤空
+            # ---- 若 macOS+PNG/ICO 图标 → 强制 Pillow ----
+            icon_path = self.icon_ent.get().strip() or (
+                str(self.generated_icon) if self.generated_icon else "")
+            if (sys.platform == "darwin"
+                    and icon_path.lower().endswith((".png", ".ico"))
+                    and "Pillow" not in pkgs):
+                pkgs.append("Pillow")
+
             if not pkgs:
                 self.after(0, lambda: self._status("未检测到依赖，改用系统环境打包"))
                 self.after(0, self._start_pack)
@@ -972,7 +1020,8 @@ class AIconPackGUI(ctk.CTk):
 
             # ── 3. 安装依赖 ─────────────────────────
             self.after(0, lambda: self._status("安装依赖中…"))
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install",
+                                   "--upgrade", "pip"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install",
                                    "pyinstaller>=6", *pkgs])
 
@@ -989,24 +1038,26 @@ class AIconPackGUI(ctk.CTk):
             result = packer.pack(
                 script_path=script,
                 name=self.name_ent.get().strip() or Path(script).stem,
-                icon=self.icon_ent.get().strip() or self.generated_icon or None,
+                icon=icon_path or None,
                 dist_dir=(self.dist_ent.get().strip()
-                          if hasattr(self, "dist_ent") and self.dist_ent.get().strip()
-                          else None),
+                          if self.dist_ent.get().strip() else None),
                 hidden_imports=None,
                 add_data=None,
             )
             ok = result.returncode == 0
             if ok and self.sw_keep.get():
                 shutil.rmtree("build", ignore_errors=True)
-                spec_name = (self.name_ent.get().strip() or Path(script).stem) + ".spec"
+                spec_name = (self.name_ent.get().strip()
+                             or Path(script).stem) + ".spec"
                 if Path(spec_name).exists():
                     Path(spec_name).unlink()
-            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
-            self.after(0, lambda: self._status(
-                "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
+            Path("pack_log.txt").write_text(
+                result.stdout + "\n" + result.stderr, encoding="utf-8")
+            self.after(0, lambda:
+                       self._status("自动打包成功！"
+                                    if ok else "自动打包失败！查看 pack_log.txt"))
         except Exception as e:
-            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))  # 捕获 e
+            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
         finally:
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
