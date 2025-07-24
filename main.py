@@ -797,27 +797,89 @@ class AIconPackGUI(ctk.CTk):
 
     def _detect_dependencies(self, script: str) -> list[str]:
         """
-        粗略扫描入口脚本里出现的第三方顶级模块，并把常见别名映射
-        到真正的 PyPI 包名，避免 “PIL / cv2” 之类安装失败。
+        基于 AST 精准提取第三方依赖，并写入 requirements.txt
         """
-        stdlib = sys.stdlib_module_names          # 3.10+ 可用
-        alias_map = {            # 需要扩展时在这里补充即可
+        import ast
+        import importlib.metadata as _imeta
+        from pathlib import Path
+        import sys
+
+        # -------- alias_map：尽量覆盖常见“别名” --------
+        alias_map = {
+            # ─── 图像 / 视觉 ───
             "PIL": "Pillow",
             "cv2": "opencv-python",
+            "cv": "opencv-python",
             "skimage": "scikit-image",
+            "sklearn": "scikit-learn",
+
+            # ─── 解析 / 格式 ───
+            "bs4": "beautifulsoup4",
+            "BeautifulSoup": "beautifulsoup4",
+            "yaml": "PyYAML",
+            "ruamel": "ruamel.yaml",
+            "ruamel_yaml": "ruamel.yaml",
+            "lxml": "lxml",
+            "dateutil": "python-dateutil",
+
+            # ─── Web / 网络 ───
+            "jinja2": "Jinja2",
+            "telegram": "python-telegram-bot",
+            "serial": "pyserial",
+            "httplib2": "httplib2",
+
+            # ─── 科学计算 / ML ───
+            "tensorflow": "tensorflow",
+            "torch": "torch",
+            "jax": "jax",
+
+            # ─── 加密 ───
             "Crypto": "pycryptodome",
+
+            # ─── 图形 / GUI ───
+            "OpenGL": "PyOpenGL",
+            "pygame": "pygame",
+            "wx": "wxPython",
+            "gi": "PyGObject",
+
+            # ─── 其他常用 ───
+            "six": "six",
+            "tqdm": "tqdm",
+            "regex": "regex",
         }
 
-        pattern = re.compile(r'^\s*(?:from|import)\s+([a-zA-Z0-9_\.]+)', re.M)
-        txt = Path(script).read_text(encoding="utf-8", errors="ignore")
-
+        stdlib = sys.stdlib_module_names
         pkgs: set[str] = set()
-        for mod in pattern.findall(txt):
-            root = mod.split('.')[0]
-            if root and root not in stdlib:
-                pkgs.add(alias_map.get(root, root))   # 应用映射
 
-        return sorted(pkgs)
+        # ---------- 1. AST 解析 ----------
+        source = Path(script).read_text(encoding="utf-8", errors="ignore")
+        tree = ast.parse(source, filename=script)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    root = alias.name.split(".")[0]
+                    if root and root not in stdlib:
+                        pkgs.add(root)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                root = node.module.split(".")[0]
+                if root and root not in stdlib:
+                    pkgs.add(root)
+
+        # ---------- 2. 映射到 PyPI ----------
+        mapped = {alias_map.get(m, m) for m in pkgs}
+
+        #    通过运行环境补全顶层名 → 发行版
+        top_to_dist = _imeta.packages_distributions()
+        for mod in list(mapped):
+            if mod in top_to_dist:
+                mapped.update(top_to_dist[mod])
+
+        requirements = sorted(mapped)
+
+        # ---------- 3. 写 requirements.txt ----------
+        Path("requirements.txt").write_text("\n".join(requirements), encoding="utf-8")
+
+        return requirements
 
     # ---------- 打包线程 ----------
     def _browse_script(self):
