@@ -612,8 +612,9 @@ class AIconPackGUI(ctk.CTk):
             sticky="ew", padx=18, pady=(0, 12))
         self.ai_bar.stop()
 
-    # ========== PACK PAGE (centered) ==========
+    # ========== PACK PAGE ==========
     def _build_pack_page(self):
+        """构建“PyInstaller 打包”标签页（已补回 dist 目录输入框）"""
         p = self.pack_tab
         p.columnconfigure(0, weight=1)
         p.columnconfigure(2, weight=1)
@@ -623,7 +624,7 @@ class AIconPackGUI(ctk.CTk):
         outer.columnconfigure(1, weight=1)
 
         row = 0
-        # 入口脚本
+        # ── 入口脚本 ───────────────────────────────────
         ctk.CTkLabel(outer, text="入口脚本:", font=("", 14)).grid(
             row=row, column=0, sticky="e", pady=8, padx=10)
         self.script_ent = ctk.CTkEntry(outer, placeholder_text="app.py")
@@ -632,7 +633,7 @@ class AIconPackGUI(ctk.CTk):
                       command=self._browse_script).grid(row=row, column=2,
                                                         sticky="w", padx=10, pady=8)
 
-        # 图标文件
+        # ── 图标文件 ───────────────────────────────────
         row += 1
         ctk.CTkLabel(outer, text="图标文件 (可选):", font=("", 12)).grid(
             row=row, column=0, sticky="e", pady=8, padx=10)
@@ -645,7 +646,14 @@ class AIconPackGUI(ctk.CTk):
         ctk.CTkButton(btn_frame, text="用生成",
                       width=64, command=self._use_generated_icon).grid(row=0, column=1)
 
-        # 应用名称
+        # ── 输出目录(dist)  ←★ 新增 ─────────────────────
+        row += 1
+        ctk.CTkLabel(outer, text="输出目录(dist) (可选):", font=("", 12)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.dist_ent = ctk.CTkEntry(outer, placeholder_text="dist")
+        self.dist_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
+
+        # ── 应用名称 ───────────────────────────────────
         row += 1
         ctk.CTkLabel(outer, text="应用名称:", font=("", 14)).grid(
             row=row, column=0, sticky="e", pady=8, padx=10)
@@ -835,6 +843,7 @@ class AIconPackGUI(ctk.CTk):
                          daemon=True).start()
 
     def _pack_thread(self, script, icon_path):
+        """普通打包线程（增加 dist_dir 容错）"""
         packer = PyInstallerPacker(
             onefile=self.sw_one.get(),
             windowed=self.sw_win.get(),
@@ -847,7 +856,9 @@ class AIconPackGUI(ctk.CTk):
                 script_path=script,
                 name=self.name_ent.get().strip() or Path(script).stem,
                 icon=icon_path if icon_path else None,
-                dist_dir=self.dist_ent.get().strip() or None,
+                dist_dir=(self.dist_ent.get().strip()
+                          if hasattr(self, "dist_ent") and self.dist_ent.get().strip()
+                          else None),
                 hidden_imports=[x.strip() for x in
                                 self.hidden_ent.get().split(",") if x.strip()] or None,
                 add_data=[self.data_ent.get().strip()]
@@ -914,7 +925,9 @@ class AIconPackGUI(ctk.CTk):
                 script_path=script,
                 name=self.name_ent.get().strip() or Path(script).stem,
                 icon=self.icon_ent.get().strip() or self.generated_icon or None,
-                dist_dir=self.dist_ent.get().strip() or None,
+                dist_dir=(self.dist_ent.get().strip()
+                          if hasattr(self, "dist_ent") and self.dist_ent.get().strip()
+                          else None),
                 hidden_imports=None,
                 add_data=None
             )
