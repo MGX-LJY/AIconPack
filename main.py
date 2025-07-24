@@ -23,7 +23,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable, List, Literal, Mapping, Optional, Sequence
-
+import re
 # ────────────────────  3rd-party  ────────────────────
 import customtkinter as ctk
 import requests
@@ -683,7 +683,15 @@ class AIconPackGUI(ctk.CTk):
         self.pack_btn = ctk.CTkButton(outer, text="📦  开始打包",
                                       height=46, command=self._start_pack)
         self.pack_btn.grid(row=row, column=0, columnspan=3,
-                           sticky="ew", pady=18)
+                           sticky="ew", pady=(18, 6))
+
+        # ☆ 自动依赖 + 虚拟环境打包
+        row += 1
+        self.auto_pack_btn = ctk.CTkButton(outer, text="🤖 自动依赖打包",
+                                           height=42, fg_color="#2D7D46",
+                                           command=self._start_auto_pack)
+        self.auto_pack_btn.grid(row=row, column=0, columnspan=3,
+                                sticky="ew", pady=(0, 18))
 
         # 进度条
         row += 1
@@ -730,6 +738,34 @@ class AIconPackGUI(ctk.CTk):
         self.preview_lbl.configure(image=cimg, text=""); self.preview_img = cimg
         self._status("生成完成，可前往『打包』页")
         self.smooth_btn.configure(state="normal")  # 启用“圆润处理”
+
+    def _start_auto_pack(self):
+        script = self.script_ent.get().strip()
+        if not script or not Path(script).exists():
+            messagebox.showerror("错误", "请选择有效的入口脚本")
+            return
+
+        self.auto_pack_btn.configure(state="disabled")
+        self.pack_bar.start()
+        self._status("准备自动打包…")
+        threading.Thread(target=self._auto_pack_thread,
+                         args=(script,), daemon=True).start()
+
+    def _detect_dependencies(self, script: str) -> list[str]:
+        """
+        读取脚本，粗略提取 `import xxx` / `from xxx import` 的第三方顶级包名。
+        简单排除标准库（通过 `sys.stdlib_module_names`）。
+        """
+        stdlib = sys.stdlib_module_names        # 3.10+ 可用
+        pattern = re.compile(r'^\s*(?:from|import)\s+([a-zA-Z0-9_\.]+)', re.M)
+        txt = Path(script).read_text(encoding="utf-8", errors="ignore")
+        pkgs: set[str] = set()
+        for mod in pattern.findall(txt):
+            root = mod.split('.')[0]
+            if root and root not in stdlib:
+                pkgs.add(root)
+        return sorted(pkgs)
+
     # ---------- 打包线程 ----------
     def _browse_script(self):
         p = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
@@ -787,6 +823,62 @@ class AIconPackGUI(ctk.CTk):
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
             self.after(0, self.pack_bar.stop)
+
+    def _auto_pack_thread(self, script: str):
+        """
+        1) 解析依赖  → requirements
+        2) 创建临时 venv (.aipack_venv)
+        3) pip install -r requirements
+        4) 用 venv/python 调 PyInstaller
+        """
+        venv_dir = Path(".aipack_venv")
+        python_exe = venv_dir / "bin" / "python" if os.name != "nt" else venv_dir / "Scripts" / "python.exe"
+        try:
+            # ── 1. 解析依赖 ─────────────────────────
+            pkgs = self._detect_dependencies(script)
+            if not pkgs:
+                self.after(0, lambda: self._status("未检测到第三方依赖，改用系统环境打包"))
+                self.after(0, self._start_pack)    # fall-back
+                return
+
+            # ── 2. 创建 venv ────────────────────────
+            if venv_dir.exists():
+                shutil.rmtree(venv_dir)
+            subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+
+            # ── 3. 安装依赖 ─────────────────────────
+            self.after(0, lambda: self._status("安装依赖中…"))
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller", *pkgs])
+
+            # ── 4. 调 PyInstaller ───────────────────
+            self.after(0, lambda: self._status("依赖安装完成，开始打包…"))
+            packer = PyInstallerPacker(
+                onefile=self.sw_one.get(),
+                windowed=self.sw_win.get(),
+                clean=self.sw_clean.get(),
+                debug=self.sw_debug.get(),
+                upx=self.sw_upx.get(),
+                pyinstaller_exe=str(python_exe)
+            )
+            result = packer.pack(
+                script_path=script,
+                name=self.name_ent.get().strip() or Path(script).stem,
+                icon=self.icon_ent.get().strip() or self.generated_icon or None,
+                dist_dir=self.dist_ent.get().strip() or None,
+                hidden_imports=None,
+                add_data=None
+            )
+            ok = result.returncode == 0
+            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, "utf-8")
+            txt = "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"
+            self.after(0, lambda: self._status(txt))
+
+        except Exception as e:
+            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
+        finally:
+            self.after(0, self.pack_bar.stop)
+            self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
 
     # ---------- 设置 & 状态 ----------
     def apply_settings(self, cfg: dict):
