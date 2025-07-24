@@ -373,6 +373,10 @@ def _set_tip(widget, text: str):
 
 # =============== 配置文件操作 =============================================
 _CFG = Path.home() / ".aiconpack_config.json"
+
+# ☆ 额外导出一份到程序目录，文件名固定 config.json
+CONFIG_EXPORT = Path(__file__).with_name("config.json")   # 也可改成 Path.cwd()/...
+
 def _load_cfg():  # noqa
     if _CFG.exists():
         try:
@@ -381,6 +385,10 @@ def _load_cfg():  # noqa
     return {"api_key": "", "base_url": "", "templates": {}}
 def _save_cfg(cfg):  # noqa
     _CFG.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
+
+# ☆ 将 cfg 写到 CONFIG_EXPORT
+def _export_cfg(cfg):  # noqa
+    CONFIG_EXPORT.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), "utf-8")
 
 
 # =============== 设置窗口 ===================================================
@@ -436,6 +444,7 @@ class SettingsDialog(ctk.CTkToplevel):
             "templates": tpl_dict,
         }
         _save_cfg(conf)
+        _export_cfg(conf)     # ☆ 每次保存同步写出 config.json
         self.master.apply_settings(conf)
         self.destroy()
 
