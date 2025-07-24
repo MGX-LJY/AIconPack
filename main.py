@@ -27,9 +27,10 @@ from typing import Any, Iterable, List, Literal, Mapping, Optional, Sequence
 # ────────────────────  3rd-party  ────────────────────
 import customtkinter as ctk
 import requests
-from PIL import Image
 from tkinter import filedialog, messagebox, Toplevel, Label
 from openai import OpenAI, APIConnectionError, RateLimitError
+import shutil
+from PIL import Image, ImageDraw
 
 # --------------------------------------------------------------------------- #
 # 1) AI 生成模块
@@ -338,6 +339,45 @@ def _extend_arg(cmd: list[str], flag: str, values: Iterable[str] | None):
         for v in values:
             cmd += [flag, str(v)]
 
+def _smooth_icon(self):
+    """对已生成的 PNG 做圆角/圆形裁切并刷新预览"""
+    if not self.generated_icon or not Path(self.generated_icon).exists():
+        messagebox.showwarning("提示", "请先生成图标")
+        return
+
+    img = Image.open(self.generated_icon).convert("RGBA")
+    w, h = img.size
+    radius = int(min(w, h) * 0.25)  # 25% 圆角
+
+    # 创建圆角遮罩
+    mask = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.rounded_rectangle((0, 0, w, h), radius=radius, fill=255)
+
+    img.putalpha(mask)
+
+    rounded_path = Path(self.generated_icon).with_stem(
+        Path(self.generated_icon).stem + "_round")
+    img.save(rounded_path, format="PNG")
+
+    self.generated_icon = rounded_path  # 更新路径
+    cimg = ctk.CTkImage(img, size=(min(420, w), min(420, h)))
+    self.preview_img = cimg
+    self.preview_lbl.configure(image=cimg, text="")
+    self._status("已生成圆润版本")
+
+def _browse_icon(self):
+    p = filedialog.askopenfilename(filetypes=[("Icon files", "*.ico *.png")])
+    if p:
+        self.icon_ent.delete(0, "end")
+        self.icon_ent.insert(0, p)
+
+def _use_generated_icon(self):
+    if not self.generated_icon:
+        messagebox.showwarning("提示", "尚未生成图标")
+        return
+    self.icon_ent.delete(0, "end")
+    self.icon_ent.insert(0, str(self.generated_icon))
 
 # --------------------------------------------------------------------------- #
 # 3) GUI 模块
@@ -515,7 +555,7 @@ class AIconPackGUI(ctk.CTk):
         self.style_opt.set("(无模板)")
         self.style_opt.grid(row=1, column=0, padx=18, pady=4)
 
-        # 生成尺寸（DALL-E）
+        # 生成尺寸
         self.size_opt = ctk.CTkOptionMenu(
             p, values=["1024x1024", "1024x1792", "1792x1024"])
         self.size_opt.set("1024x1024")
@@ -524,34 +564,41 @@ class AIconPackGUI(ctk.CTk):
         # 导出尺寸
         ctk.CTkLabel(p, text="导出尺寸:", font=("", 12)).grid(
             row=1, column=2, sticky="e", padx=6)
-        self.outsize_opt = ctk.CTkOptionMenu(p, values=["原始", "256", "512", "768"])
+        self.outsize_opt = ctk.CTkOptionMenu(
+            p, values=["原始", "256", "512", "768"])
         self.outsize_opt.set("原始")
         self.outsize_opt.grid(row=1, column=3, padx=10, pady=4)
 
         # PNG 压缩
         ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(
             row=1, column=4, sticky="e", padx=6)
-        self.comp_slider = ctk.CTkSlider(p, from_=0, to=9,
-                                         number_of_steps=9, width=140)
+        self.comp_slider = ctk.CTkSlider(
+            p, from_=0, to=9, number_of_steps=9, width=140)
         self.comp_slider.set(6)
         self.comp_slider.grid(row=1, column=5, padx=18)
 
         # 生成按钮
         self.gen_btn = ctk.CTkButton(
-            p, text="🎨 生成", width=130, command=self._start_generate)
-        self.gen_btn.grid(row=1, column=6, padx=18)
+            p, text="🎨 生成", width=120, command=self._start_generate)
+        self.gen_btn.grid(row=1, column=6, padx=8)
+
+        # ☆ 圆润按钮（初始禁用）
+        self.smooth_btn = ctk.CTkButton(
+            p, text="✨ 圆润处理", width=120,
+            command=self._smooth_icon, state="disabled")
+        self.smooth_btn.grid(row=1, column=7, padx=8)
 
         # 预览
         self.preview_lbl = ctk.CTkLabel(
             p, text="预览区域", fg_color="#151515",
             width=520, height=380, corner_radius=8)
         self.preview_lbl.grid(
-            row=3, column=0, columnspan=7,
+            row=3, column=0, columnspan=8,
             sticky="nsew", padx=18, pady=(10, 16))
 
         # 进度条
         self.ai_bar = ctk.CTkProgressBar(p, mode="indeterminate")
-        self.ai_bar.grid(row=4, column=0, columnspan=7,
+        self.ai_bar.grid(row=4, column=0, columnspan=8,
                          sticky="ew", padx=18, pady=(0, 12))
         self.ai_bar.stop()
 
@@ -575,6 +622,19 @@ class AIconPackGUI(ctk.CTk):
                       command=self._browse_script).grid(row=row, column=2,
                                                         sticky="w", padx=10, pady=8)
 
+        # 图标文件
+        row += 1
+        ctk.CTkLabel(outer, text="图标文件 (可选):", font=("", 12)).grid(
+            row=row, column=0, sticky="e", pady=8, padx=10)
+        self.icon_ent = ctk.CTkEntry(outer, placeholder_text="icon.ico / .png")
+        self.icon_ent.grid(row=row, column=1, sticky="ew", pady=8)
+        btn_frame = ctk.CTkFrame(outer, fg_color="transparent")
+        btn_frame.grid(row=row, column=2, sticky="w")
+        ctk.CTkButton(btn_frame, text="选择", width=50,
+                      command=self._browse_icon).grid(row=0, column=0, padx=(0, 4))
+        ctk.CTkButton(btn_frame, text="用生成",
+                      width=64, command=self._use_generated_icon).grid(row=0, column=1)
+
         # 应用名称
         row += 1
         ctk.CTkLabel(outer, text="应用名称:", font=("", 14)).grid(
@@ -586,35 +646,20 @@ class AIconPackGUI(ctk.CTk):
         row += 1
         swf = ctk.CTkFrame(outer, fg_color="transparent")
         swf.grid(row=row, column=0, columnspan=3, sticky="w", pady=10)
-        self.sw_one = ctk.CTkSwitch(swf, text="--onefile")
-        self.sw_win = ctk.CTkSwitch(swf, text="--noconsole")
-        self.sw_clean = ctk.CTkSwitch(swf, text="--clean")
+        self.sw_one = ctk.CTkSwitch(swf, text="--onefile");
+        self.sw_one.select()
+        self.sw_win = ctk.CTkSwitch(swf, text="--noconsole");
+        self.sw_win.select()
+        self.sw_clean = ctk.CTkSwitch(swf, text="--clean");
+        self.sw_clean.select()
         self.sw_debug = ctk.CTkSwitch(swf, text="--debug (可选)")
         self.sw_upx = ctk.CTkSwitch(swf, text="UPX (可选)")
-        self.sw_one.grid(row=0, column=0, padx=12, pady=4, sticky="w")
-        self.sw_win.grid(row=0, column=1, padx=12, pady=4, sticky="w")
-        self.sw_clean.grid(row=0, column=2, padx=12, pady=4, sticky="w")
-        self.sw_debug.grid(row=1, column=0, padx=12, pady=4, sticky="w")
-        self.sw_upx.grid(row=1, column=1, padx=12, pady=4, sticky="w")
-        for sw, tip in [
-            (self.sw_one, "单文件 EXE；取消则输出文件夹结构"),
-            (self.sw_win, "GUI 应用（无控制台）。CLI 程序请关闭"),
-            (self.sw_clean, "构建前清理临时文件夹"),
-            (self.sw_debug, "包含调试信息，体积更大"),
-            (self.sw_upx, "尝试使用 UPX 压缩可执行文件")
-        ]:
-            _set_tip(sw, tip)
-        self.sw_one.select();
-        self.sw_win.select();
-        self.sw_clean.select()
-
-        # 输出目录
-        row += 1
-        ctk.CTkLabel(outer, text="输出目录(dist) (可选):",
-                     font=("", 12)).grid(row=row, column=0,
-                                         sticky="e", pady=8, padx=10)
-        self.dist_ent = ctk.CTkEntry(outer, placeholder_text="dist")
-        self.dist_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
+        self.sw_keep = ctk.CTkSwitch(swf, text="仅保留可执行 (可选)")
+        for idx, sw in enumerate(
+                (self.sw_one, self.sw_win, self.sw_clean,
+                 self.sw_debug, self.sw_upx, self.sw_keep)
+        ):
+            sw.grid(row=idx // 3, column=idx % 3, padx=12, pady=4, sticky="w")
 
         # hidden-imports
         row += 1
@@ -633,7 +678,7 @@ class AIconPackGUI(ctk.CTk):
         self.data_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
         # 打包按钮
-        row += 1
+        row += 4
         self.pack_btn = ctk.CTkButton(outer, text="📦  开始打包",
                                       height=46, command=self._start_pack)
         self.pack_btn.grid(row=row, column=0, columnspan=3,
@@ -683,7 +728,7 @@ class AIconPackGUI(ctk.CTk):
     def _show_preview(self, cimg):
         self.preview_lbl.configure(image=cimg, text=""); self.preview_img = cimg
         self._status("生成完成，可前往『打包』页")
-
+        self.smooth_btn.configure(state="normal")  # 启用“圆润处理”
     # ---------- 打包线程 ----------
     def _browse_script(self):
         p = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
@@ -695,18 +740,18 @@ class AIconPackGUI(ctk.CTk):
         if not script or not Path(script).exists():
             messagebox.showerror("错误", "请选择有效的入口脚本")
             return
-        if not self.generated_icon:
-            messagebox.showwarning("提示", "请先生成 Icon")
-            return
+
+        # 图标优先取输入框，没有则回退生成的
+        icon_path = self.icon_ent.get().strip() or self.generated_icon
 
         self.pack_btn.configure(state="disabled")
-        self.pack_bar.start()  # ← 开启进度条
+        self.pack_bar.start()
         self._status("开始打包…")
         threading.Thread(target=self._pack_thread,
-                         args=(script,),
+                         args=(script, icon_path),
                          daemon=True).start()
 
-    def _pack_thread(self, script):
+    def _pack_thread(self, script, icon_path):
         packer = PyInstallerPacker(
             onefile=self.sw_one.get(),
             windowed=self.sw_win.get(),
@@ -718,23 +763,29 @@ class AIconPackGUI(ctk.CTk):
             result = packer.pack(
                 script_path=script,
                 name=self.name_ent.get().strip() or Path(script).stem,
-                icon=self.generated_icon,
+                icon=icon_path if icon_path else None,
                 dist_dir=self.dist_ent.get().strip() or None,
                 hidden_imports=[x.strip() for x in
                                 self.hidden_ent.get().split(",") if x.strip()] or None,
                 add_data=[self.data_ent.get().strip()]
                 if self.data_ent.get().strip() else None
             )
+            ok = result.returncode == 0
+            # 清理中间文件
+            if ok and self.sw_keep.get():
+                shutil.rmtree("build", ignore_errors=True)
+                spec_file = Path(script).with_suffix(".spec")
+                if spec_file.exists():
+                    spec_file.unlink()
             Path("pack_log.txt").write_text(
                 result.stdout + "\n" + result.stderr, "utf-8")
-            ok = result.returncode == 0
             txt = "打包成功！" if ok else "打包失败！查看 pack_log.txt"
             self.after(0, lambda: self._status(txt))
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
-            self.after(0, self.pack_bar.stop)  # ← 停止进度条
+            self.after(0, self.pack_bar.stop)
 
     # ---------- 设置 & 状态 ----------
     def apply_settings(self, cfg: dict):
