@@ -538,83 +538,78 @@ class AIconPackGUI(ctk.CTk):
         self.icon_ent.delete(0, "end")
         self.icon_ent.insert(0, str(self.generated_icon))
     # ========== AI PAGE ==========
+    # ========== AI PAGE ==========
     def _build_ai_page(self):
+        """构建“AI 生成”标签页（布局已优化，窄窗口也能看到所有控件）"""
         p = self.ai_tab
-        p.columnconfigure(1, weight=1)
-        p.rowconfigure(3, weight=1)
+        p.columnconfigure(1, weight=1)      # 输入框列自适应
+        p.rowconfigure(5, weight=1)         # 预览区域可伸缩
 
-        # Prompt
+        # ── Row-0: Prompt ──────────────────────────────────────────────
         ctk.CTkLabel(p, text="Prompt:", font=("", 14)).grid(
             row=0, column=0, sticky="e", padx=18, pady=(16, 6))
         self.prompt_ent = ctk.CTkEntry(p, placeholder_text="极简扁平风蓝色日历图标")
         self.prompt_ent.grid(
-            row=0, column=1, columnspan=5, sticky="ew", padx=18, pady=(16, 6))
+            row=0, column=1, columnspan=10, sticky="ew", padx=18, pady=(16, 6))
 
-        # 模板
+        # ── Row-1: 模板 + 尺寸 + 压缩滑块 ───────────────────────────────
+        ctk.CTkLabel(p, text="模板:", font=("", 12)).grid(
+            row=1, column=0, sticky="e", padx=6)
         self.style_opt = ctk.CTkOptionMenu(
             p, values=["(无模板)"] + self.icon_gen.list_templates())
         self.style_opt.set("(无模板)")
-        self.style_opt.grid(row=1, column=0, padx=18, pady=4)
+        self.style_opt.grid(row=1, column=1, padx=6, pady=4)
 
-        # 生成尺寸
+        ctk.CTkLabel(p, text="分辨率:", font=("", 12)).grid(
+            row=1, column=2, sticky="e", padx=6)
         self.size_opt = ctk.CTkOptionMenu(
             p, values=["1024x1024", "1024x1792", "1792x1024"])
         self.size_opt.set("1024x1024")
-        self.size_opt.grid(row=1, column=1, padx=10, pady=4)
+        self.size_opt.grid(row=1, column=3, padx=6, pady=4)
 
-        # 导出尺寸
-        ctk.CTkLabel(p, text="导出尺寸:", font=("", 12)).grid(
-            row=1, column=2, sticky="e", padx=6)
-        self.outsize_opt = ctk.CTkOptionMenu(
-            p, values=["原始", "256", "512", "768"])
-        self.outsize_opt.set("原始")
-        self.outsize_opt.grid(row=1, column=3, padx=10, pady=4)
-
-        # PNG 压缩
         ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(
             row=1, column=4, sticky="e", padx=6)
         self.comp_slider = ctk.CTkSlider(
-            p, from_=0, to=9, number_of_steps=9, width=140)
+            p, from_=0, to=9, number_of_steps=9, width=150)
         self.comp_slider.set(6)
-        self.comp_slider.grid(row=1, column=5, padx=18)
+        self.comp_slider.grid(row=1, column=5, padx=6)
 
-        # --- 批量数量 ---
+        # ── Row-Btn: 数量 + 三个操作按钮（独立一行，窄窗也能显示） ───────
+        row_btn = 2
         ctk.CTkLabel(p, text="数量:", font=("", 12)).grid(
-            row=1, column=6, sticky="e")
+            row=row_btn, column=0, sticky="e", padx=6)
         self.count_opt = ctk.CTkOptionMenu(
-            p, values=[str(i) for i in range(1, 11)])   # 1-10
+            p, values=[str(i) for i in range(1, 11)])
         self.count_opt.set("1")
-        self.count_opt.grid(row=1, column=7, padx=4, pady=4)
+        self.count_opt.grid(row=row_btn, column=1, padx=6, pady=4)
 
-        # 生成按钮
         self.gen_btn = ctk.CTkButton(
             p, text="🎨 生成", width=110, command=self._start_generate)
-        self.gen_btn.grid(row=1, column=8, padx=(6, 2))
+        self.gen_btn.grid(row=row_btn, column=2, padx=6, pady=2)
 
-        # 圆润按钮
         self.smooth_btn = ctk.CTkButton(
             p, text="✨ 圆润处理", width=110,
             command=self._smooth_icon, state="disabled")
-        self.smooth_btn.grid(row=1, column=9, padx=2)
+        self.smooth_btn.grid(row=row_btn, column=3, padx=6, pady=2)
 
-        # ☆ 导入外部图片按钮
         self.import_btn = ctk.CTkButton(
-            p, text="📂 导入图片", width=110,
-            fg_color="#455A9C", command=self._import_image)
-        self.import_btn.grid(row=1, column=10, padx=(2, 6))
+            p, text="📂 导入图片", width=110, fg_color="#455A9C",
+            command=self._import_image)
+        self.import_btn.grid(row=row_btn, column=4, padx=6, pady=2)
 
-        # 预览
+        # ── 预览区域 ───────────────────────────────────────────────────
         self.preview_lbl = ctk.CTkLabel(
             p, text="预览区域", fg_color="#151515",
             width=520, height=380, corner_radius=8)
         self.preview_lbl.grid(
-            row=3, column=0, columnspan=8,
+            row=row_btn + 2, column=0, columnspan=11,
             sticky="nsew", padx=18, pady=(10, 16))
 
-        # 进度条
+        # ── 进度条 ───────────────────────────────────────────────────
         self.ai_bar = ctk.CTkProgressBar(p, mode="indeterminate")
-        self.ai_bar.grid(row=4, column=0, columnspan=8,
-                         sticky="ew", padx=18, pady=(0, 12))
+        self.ai_bar.grid(
+            row=row_btn + 3, column=0, columnspan=11,
+            sticky="ew", padx=18, pady=(0, 12))
         self.ai_bar.stop()
 
     # ========== PACK PAGE (centered) ==========
@@ -795,17 +790,26 @@ class AIconPackGUI(ctk.CTk):
 
     def _detect_dependencies(self, script: str) -> list[str]:
         """
-        读取脚本，粗略提取 `import xxx` / `from xxx import` 的第三方顶级包名。
-        简单排除标准库（通过 `sys.stdlib_module_names`）。
+        粗略扫描入口脚本里出现的第三方顶级模块，并把常见别名映射
+        到真正的 PyPI 包名，避免 “PIL / cv2” 之类安装失败。
         """
-        stdlib = sys.stdlib_module_names        # 3.10+ 可用
+        stdlib = sys.stdlib_module_names          # 3.10+ 可用
+        alias_map = {            # 需要扩展时在这里补充即可
+            "PIL": "Pillow",
+            "cv2": "opencv-python",
+            "skimage": "scikit-image",
+            "Crypto": "pycryptodome",
+        }
+
         pattern = re.compile(r'^\s*(?:from|import)\s+([a-zA-Z0-9_\.]+)', re.M)
         txt = Path(script).read_text(encoding="utf-8", errors="ignore")
+
         pkgs: set[str] = set()
         for mod in pattern.findall(txt):
             root = mod.split('.')[0]
             if root and root not in stdlib:
-                pkgs.add(root)
+                pkgs.add(alias_map.get(root, root))   # 应用映射
+
         return sorted(pkgs)
 
     # ---------- 打包线程 ----------
@@ -890,8 +894,11 @@ class AIconPackGUI(ctk.CTk):
 
             # ── 3. 安装依赖 ─────────────────────────
             self.after(0, lambda: self._status("安装依赖中…"))
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller", *pkgs])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install",
+                                   "--upgrade", "pip"])
+            # ★ 这里固定 PyInstaller>=6，跳过旧版本的 Python 约束告警
+            subprocess.check_call([str(python_exe), "-m", "pip", "install",
+                                   "pyinstaller>=6", *pkgs])
 
             # ── 4. 调 PyInstaller ───────────────────
             self.after(0, lambda: self._status("依赖安装完成，开始打包…"))
