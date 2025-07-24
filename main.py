@@ -504,20 +504,27 @@ class AIconPackGUI(ctk.CTk):
     def _style_button(self, btn: ctk.CTkButton, hover_shift: float = 0.04):
         """
         统一按钮样式：手型光标 + 轻微变暗 Hover 效果
+        自动兼容 str / tuple / list 返回格式
         """
         import colorsys
 
         btn.configure(cursor="hand2")
+
         orig = btn.cget("fg_color")
-        if isinstance(orig, tuple):
+        # customtkinter 可能返回 str / tuple / list
+        if isinstance(orig, (tuple, list)):
             orig = orig[0]
 
+        # 如果还是 None，则给一个默认值
+        if not isinstance(orig, str):
+            orig = "#1f1f1f"
+
         # 计算 hover_color（HSV 降亮度）
-        r, g, b = [int(orig.lstrip("#")[i:i+2], 16)/255 for i in (0, 2, 4)]
+        r, g, b = [int(orig.lstrip("#")[i:i + 2], 16) / 255 for i in (0, 2, 4)]
         h, s, v = colorsys.rgb_to_hsv(r, g, b)
         v = max(0, v - hover_shift)
         r2, g2, b2 = colorsys.hsv_to_rgb(h, s, v)
-        hover = f"#{int(r2*255):02x}{int(g2*255):02x}{int(b2*255):02x}"
+        hover = f"#{int(r2 * 255):02x}{int(g2 * 255):02x}{int(b2 * 255):02x}"
 
         btn.configure(hover_color=hover)
 
