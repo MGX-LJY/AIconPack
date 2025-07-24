@@ -538,7 +538,6 @@ class AIconPackGUI(ctk.CTk):
         self.icon_ent.delete(0, "end")
         self.icon_ent.insert(0, str(self.generated_icon))
     # ========== AI PAGE ==========
-    # ========== AI PAGE ==========
     def _build_ai_page(self):
         """构建“AI 生成”标签页（布局已优化，窄窗口也能看到所有控件）"""
         p = self.ai_tab
@@ -842,8 +841,8 @@ class AIconPackGUI(ctk.CTk):
                          args=(script, icon_path),
                          daemon=True).start()
 
-    def _pack_thread(self, script, icon_path):
-        """普通打包线程（增加 dist_dir 容错）"""
+    def _pack_thread(self, script: str, icon_path: Optional[str]):
+        """普通打包线程（清理 build 目录 & .spec 文件改为按 --name 查找）"""
         packer = PyInstallerPacker(
             onefile=self.sw_one.get(),
             windowed=self.sw_win.get(),
@@ -855,28 +854,37 @@ class AIconPackGUI(ctk.CTk):
             result = packer.pack(
                 script_path=script,
                 name=self.name_ent.get().strip() or Path(script).stem,
-                icon=icon_path if icon_path else None,
+                icon=icon_path or None,
                 dist_dir=(self.dist_ent.get().strip()
                           if hasattr(self, "dist_ent") and self.dist_ent.get().strip()
                           else None),
                 hidden_imports=[x.strip() for x in
                                 self.hidden_ent.get().split(",") if x.strip()] or None,
                 add_data=[self.data_ent.get().strip()]
-                if self.data_ent.get().strip() else None
+                         if self.data_ent.get().strip() else None
             )
+
             ok = result.returncode == 0
-            # 清理中间文件
+
+            # -------- 清理 --------
             if ok and self.sw_keep.get():
+                # 1) build 目录
                 shutil.rmtree("build", ignore_errors=True)
-                spec_file = Path(script).with_suffix(".spec")
-                if spec_file.exists():
-                    spec_file.unlink()
-            Path("pack_log.txt").write_text(
-                result.stdout + "\n" + result.stderr, "utf-8")
-            txt = "打包成功！" if ok else "打包失败！查看 pack_log.txt"
-            self.after(0, lambda: self._status(txt))
+                # 2) .spec 文件（按 --name 决定）
+                spec_name = (self.name_ent.get().strip()
+                             or Path(script).stem) + ".spec"
+                if Path(spec_name).exists():
+                    Path(spec_name).unlink()
+
+            # ------ 日志 / 状态 ------
+            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr,
+                                            encoding="utf-8")
+            self.after(0, lambda: self._status(
+                "打包成功！" if ok else "打包失败！查看 pack_log.txt"))
+
         except Exception as e:
-            self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
+            self.after(0, lambda: self._status(f"打包异常: {e}"))
+
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
             self.after(0, self.pack_bar.stop)
@@ -931,10 +939,21 @@ class AIconPackGUI(ctk.CTk):
                 hidden_imports=None,
                 add_data=None
             )
+
             ok = result.returncode == 0
-            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, "utf-8")
-            txt = "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"
-            self.after(0, lambda: self._status(txt))
+
+            # -------- 清理 --------
+            if ok and self.sw_keep.get():
+                shutil.rmtree("build", ignore_errors=True)
+                spec_name = (self.name_ent.get().strip()
+                             or Path(script).stem) + ".spec"
+                if Path(spec_name).exists():
+                    Path(spec_name).unlink()
+
+            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr,
+                                            encoding="utf-8")
+            self.after(0, lambda: self._status(
+                "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
 
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
