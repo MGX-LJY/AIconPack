@@ -578,16 +578,30 @@ class AIconPackGUI(ctk.CTk):
         self.comp_slider.set(6)
         self.comp_slider.grid(row=1, column=5, padx=18)
 
+        # --- 批量数量 ---
+        ctk.CTkLabel(p, text="数量:", font=("", 12)).grid(
+            row=1, column=6, sticky="e")
+        self.count_opt = ctk.CTkOptionMenu(
+            p, values=[str(i) for i in range(1, 11)])   # 1-10
+        self.count_opt.set("1")
+        self.count_opt.grid(row=1, column=7, padx=4, pady=4)
+
         # 生成按钮
         self.gen_btn = ctk.CTkButton(
-            p, text="🎨 生成", width=120, command=self._start_generate)
-        self.gen_btn.grid(row=1, column=6, padx=8)
+            p, text="🎨 生成", width=110, command=self._start_generate)
+        self.gen_btn.grid(row=1, column=8, padx=(6, 2))
 
-        # ☆ 圆润按钮（初始禁用）
+        # 圆润按钮
         self.smooth_btn = ctk.CTkButton(
-            p, text="✨ 圆润处理", width=120,
+            p, text="✨ 圆润处理", width=110,
             command=self._smooth_icon, state="disabled")
-        self.smooth_btn.grid(row=1, column=7, padx=8)
+        self.smooth_btn.grid(row=1, column=9, padx=2)
+
+        # ☆ 导入外部图片按钮
+        self.import_btn = ctk.CTkButton(
+            p, text="📂 导入图片", width=110,
+            fg_color="#455A9C", command=self._import_image)
+        self.import_btn.grid(row=1, column=10, padx=(2, 6))
 
         # 预览
         self.preview_lbl = ctk.CTkLabel(
@@ -709,30 +723,58 @@ class AIconPackGUI(ctk.CTk):
         style = None if self.style_opt.get() == "(无模板)" else self.style_opt.get()
         size = self.size_opt.get()
         comp = int(self.comp_slider.get())
+        count = int(self.count_opt.get())          # ← 新增
 
         self.gen_btn.configure(state="disabled")
-        self.ai_bar.start()  # ← 开启进度条
+        self.ai_bar.start()
         self._status("生成中…")
-        threading.Thread(target=self._gen_thread,
-                         args=(prompt, style, size, comp),
-                         daemon=True).start()
+        threading.Thread(
+            target=self._gen_thread,
+            args=(prompt, style, size, comp, count),   # ← 多一个参数
+            daemon=True
+        ).start()
 
-    def _gen_thread(self, prompt, style, size, comp):
+    def _gen_thread(self, prompt, style, size, comp, count):
         try:
-            icon_path = self.icon_gen.generate(
+            paths = self.icon_gen.generate(
                 prompt, style=style, size=size,
-                compress_level=comp, convert_to_ico=True
-            )[0]
-            self.generated_icon = icon_path
-            img = Image.open(icon_path)
+                compress_level=comp, convert_to_ico=True,
+                n=count                                   # ← 传入数量
+            )
+            self.generated_icon = paths[0]               # 先显示第一张
+            img = Image.open(paths[0])
             cimg = ctk.CTkImage(img, size=(min(420, img.width),
                                            min(420, img.height)))
             self.after(0, lambda: self._show_preview(cimg))
+
+            if count > 1:
+                self.after(0, lambda: self._status(
+                    f"已批量生成 {count} 张，全部保存在 {Path(paths[0]).parent}"))
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
         finally:
             self.after(0, lambda: self.gen_btn.configure(state="normal"))
             self.after(0, self.ai_bar.stop)
+
+    def _import_image(self):
+        """导入本地 PNG/JPG 进行预览及圆润处理"""
+        path = filedialog.askopenfilename(
+            filetypes=[("Image files", "*.png *.jpg *.jpeg")])
+        if not path:
+            return
+        try:
+            img = Image.open(path).convert("RGBA")
+        except Exception as e:
+            messagebox.showerror("错误", f"无法打开图片: {e}")
+            return
+
+        self.generated_icon = Path(path)
+        cimg = ctk.CTkImage(img, size=(min(420, img.width),
+                                       min(420, img.height)))
+        self.preview_img = cimg
+        self.preview_lbl.configure(image=cimg, text="")
+        self.smooth_btn.configure(state="normal")        # 允许圆润
+        self._status("已导入外部图片，可执行圆润处理")
 
     def _show_preview(self, cimg):
         self.preview_lbl.configure(image=cimg, text=""); self.preview_img = cimg
