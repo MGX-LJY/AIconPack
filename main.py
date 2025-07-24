@@ -874,7 +874,7 @@ class AIconPackGUI(ctk.CTk):
             )
             reply = rsp.choices[0].message.content.strip()
             pkgs = {re.split(r"[,\s]+", p)[0] for p in reply.split(",") if p.strip()}
-            pkgs = sorted(pkgs)
+            pkgs = sorted(x for x in pkgs if x)       # 过滤空字符串
             self._write_requirements(pkgs)
             return pkgs if pkgs else fallback
         except Exception as e:
@@ -883,8 +883,9 @@ class AIconPackGUI(ctk.CTk):
             return fallback
 
     def _write_requirements(self, pkgs: list[str]):
-        """把依赖写入 requirements.txt（覆盖写）"""
-        Path("requirements.txt").write_text("\n".join(pkgs), encoding="utf-8")
+        """把依赖写入 requirements.txt（覆盖写，自动过滤空项）"""
+        Path("requirements.txt").write_text(
+            "\n".join(p for p in pkgs if p), encoding="utf-8")
 
     # ---------- 打包线程 ----------
     def _browse_script(self):
@@ -909,7 +910,7 @@ class AIconPackGUI(ctk.CTk):
                          daemon=True).start()
 
     def _pack_thread(self, script: str, icon_path: Optional[str]):
-        """普通打包线程（清理 build 目录 & .spec 文件改为按 --name 查找）"""
+        """普通打包线程（清理 build 目录 & .spec 文件按 --name 查找）"""
         packer = PyInstallerPacker(
             onefile=self.sw_one.get(),
             windowed=self.sw_win.get(),
@@ -930,28 +931,18 @@ class AIconPackGUI(ctk.CTk):
                 add_data=[self.data_ent.get().strip()]
                          if self.data_ent.get().strip() else None
             )
-
             ok = result.returncode == 0
-
-            # -------- 清理 --------
             if ok and self.sw_keep.get():
-                # 1) build 目录
                 shutil.rmtree("build", ignore_errors=True)
-                # 2) .spec 文件（按 --name 决定）
-                spec_name = (self.name_ent.get().strip()
-                             or Path(script).stem) + ".spec"
+                spec_name = (self.name_ent.get().strip() or Path(script).stem) + ".spec"
                 if Path(spec_name).exists():
                     Path(spec_name).unlink()
-
-            # ------ 日志 / 状态 ------
             Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr,
                                             encoding="utf-8")
             self.after(0, lambda: self._status(
                 "打包成功！" if ok else "打包失败！查看 pack_log.txt"))
-
         except Exception as e:
-            self.after(0, lambda: self._status(f"打包异常: {e}"))
-
+            self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
             self.after(0, self.pack_bar.stop)
@@ -968,6 +959,7 @@ class AIconPackGUI(ctk.CTk):
         try:
             # ── 1. 解析依赖 ─────────────────────────
             pkgs = self._detect_dependencies_ai(script)
+            pkgs = [p for p in pkgs if p]        # 再保险过滤空包名
             if not pkgs:
                 self.after(0, lambda: self._status("未检测到依赖，改用系统环境打包"))
                 self.after(0, self._start_pack)
@@ -981,7 +973,8 @@ class AIconPackGUI(ctk.CTk):
             # ── 3. 安装依赖 ─────────────────────────
             self.after(0, lambda: self._status("安装依赖中…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller>=6", *pkgs])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install",
+                                   "pyinstaller>=6", *pkgs])
 
             # ── 4. 调 PyInstaller ───────────────────
             self.after(0, lambda: self._status("依赖安装完成，开始打包…"))
@@ -1013,7 +1006,7 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda: self._status(
                 "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
         except Exception as e:
-            self.after(0, lambda: self._status(f"自动打包异常: {e}"))
+            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))  # 捕获 e
         finally:
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
