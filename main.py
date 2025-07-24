@@ -955,8 +955,42 @@ class AIconPackGUI(ctk.CTk):
                          args=(script, icon_path),
                          daemon=True).start()
 
+    # ---------- 打包辅助：清理残留 ----------
+    def _clean_artifacts(self, root: Path, app_name: str, dist_path: Optional[str]):
+        """
+        移除旧 build / dist / *.spec，
+        • root       : 项目根（脚本所在目录）
+        • app_name   : PyInstaller --name
+        • dist_path  : 用户自定义 dist 目录（可能为空）
+        """
+        # 1) build 目录（默认或指定 workpath）
+        shutil.rmtree(root / "build", ignore_errors=True)
+
+        # 2) dist 目录
+        if dist_path:
+            shutil.rmtree(Path(dist_path), ignore_errors=True)
+        else:
+            shutil.rmtree(root / "dist", ignore_errors=True)
+
+        # 3) .spec 文件
+        (root / f"{app_name}.spec").unlink(missing_ok=True)
+
+    # ---------- 普通打包线程（修复版，可彻底清理残留） ----------
     def _pack_thread(self, script: str, icon_path: Optional[str]):
-        """普通打包线程（清理 build 目录 & .spec 文件改为按 --name 查找）"""
+        """
+        • 打包前先清理旧 build/dist/spec
+        • 将 .spec / build / dist 统统放到脚本目录，避免污染 GUI 运行目录
+        • 若勾选「仅保留可执行」再做二次清理
+        """
+        project_root = Path(script).resolve().parent
+        app_name     = (self.name_ent.get().strip() or Path(script).stem)
+        dist_dir_in  = (self.dist_ent.get().strip() or None)
+        dist_dir     = dist_dir_in or str(project_root / "dist")
+
+        # — ① 预清理 —
+        self._clean_artifacts(project_root, app_name, dist_dir_in)
+
+        # — ② 调 PyInstaller —
         packer = PyInstallerPacker(
             onefile=self.sw_one.get(),
             windowed=self.sw_win.get(),
@@ -967,69 +1001,72 @@ class AIconPackGUI(ctk.CTk):
         try:
             result = packer.pack(
                 script_path=script,
-                name=self.name_ent.get().strip() or Path(script).stem,
+                name=app_name,
                 icon=icon_path or None,
-                dist_dir=(self.dist_ent.get().strip()
-                          if hasattr(self, "dist_ent") and self.dist_ent.get().strip()
-                          else None),
-                hidden_imports=[x.strip() for x in
-                                self.hidden_ent.get().split(",") if x.strip()] or None,
-                add_data=[self.data_ent.get().strip()]
-                         if self.data_ent.get().strip() else None
+                dist_dir=dist_dir,
+                workpath=str(project_root / "build"),   # build 放脚本目录
+                spec_path=str(project_root),            # .spec 同上
+                hidden_imports=[x.strip() for x in self.hidden_ent.get().split(",") if x.strip()] or None,
+                add_data=[self.data_ent.get().strip()] if self.data_ent.get().strip() else None
             )
 
-            ok = result.returncode == 0
+            ok = (result.returncode == 0)
 
-            # -------- 清理 --------
+            # — ③ 二次清理（仅保留可执行）—
             if ok and self.sw_keep.get():
-                # 1) build 目录
-                shutil.rmtree("build", ignore_errors=True)
-                # 2) .spec 文件（按 --name 决定）
-                spec_name = (self.name_ent.get().strip()
-                             or Path(script).stem) + ".spec"
-                if Path(spec_name).exists():
-                    Path(spec_name).unlink()
+                self._clean_artifacts(project_root, app_name, dist_dir_in)
 
-            # ------ 日志 / 状态 ------
-            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr,
-                                            encoding="utf-8")
+            # — ④ 写日志 & 更新状态 —
+            (project_root / "pack_log.txt").write_text(
+                result.stdout + "\n" + result.stderr, encoding="utf-8"
+            )
             self.after(0, lambda: self._status(
                 "打包成功！" if ok else "打包失败！查看 pack_log.txt"))
 
         except Exception as e:
-            self.after(0, lambda: self._status(f"打包异常: {e}"))
+            self.after(0, lambda e=e: self._status(f"打包异常: {e}"))
 
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
             self.after(0, self.pack_bar.stop)
 
-    # ---------- 自动依赖 + 打包线程（完整修正版） ----------
+    # ---------- 自动依赖 + 打包线程（修正版） ----------
     def _auto_pack_thread(self, script: str):
         """
-        自动流程：
-        1. 在『脚本所在目录』生成 / 备份 requirements.txt（pipreqs）
-        2. 追加必须依赖：PyQt6* / Pillow / PyInstaller
-        3. 清理旧 build / dist / *.spec，创建隔离 venv 并安装依赖
-        4. macOS 自动将 png/ico → icns
-        5. 调 PyInstaller（macOS 强制 onedir；其他平台按开关）
-        6. 结束后恢复原 requirements.txt（若存在）
+        自动流程（含残留清理）：
+        0. 计算项目路径 / 名称等
+        1. 预清理旧 build / dist / *.spec
+        2. pipreqs 生成 requirements.txt，并追加关键依赖
+        3. 创建隔离 venv (.aipack_venv) 并安装依赖
+        4. macOS 将 png/ico → icns
+        5. 调 PyInstaller 打包（mac 强制 onedir）
+        6. 写日志；若勾选「仅保留可执行」再做二次清理
+        7. 恢复用户原始 requirements.txt（如有）
         """
-        import shutil
+
         import platform
         from PIL import Image
 
         project_root = Path(script).resolve().parent
-        req_path     = project_root / "requirements.txt"
-        req_backup   = project_root / "requirements.txt.bak"
+        app_name     = self.name_ent.get().strip() or Path(script).stem
+        dist_dir     = str(project_root / "dist")             # 固定到项目里
+        work_dir     = str(project_root / "build")
+        spec_dir     = str(project_root)
         venv_dir     = project_root / ".aipack_venv"
         python_exe   = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
+        req_path     = project_root / "requirements.txt"
+        req_backup   = project_root / "requirements.txt.bak"
+
         try:
-            # ── 0) 备份旧 requirements.txt ────────────────────────────
+            # ── 1) 预清理旧 build/dist/spec ──────────────────────────
+            self._clean_artifacts(project_root, app_name, None)
+
+            # ── 2) 备份旧 requirements.txt（若存在） ────────────────
             if req_path.exists():
                 shutil.copy(req_path, req_backup)
 
-            # ── 1) pipreqs 生成新的 requirements.txt ─────────────────
+            # ── 3) pipreqs 生成依赖清单 ─────────────────────────────
             self.after(0, lambda: self._status("pipreqs 正在分析依赖…"))
             subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pipreqs>=0.4.13"])
             subprocess.check_call([
@@ -1037,41 +1074,32 @@ class AIconPackGUI(ctk.CTk):
                 "--force", "--savepath", str(req_path), "--use-local"
             ])
 
-            # 1.1) 追加必须包（避免漏装） -------------------------------
+            # 追加必要依赖（冷热启动双保险）
             with req_path.open("a", encoding="utf-8") as f:
-                f.write("\nPyQt6>=6.7\nPyQt6-Qt6>=6.7\nPyQt6-sip>=13.7\n")
-                f.write("pillow>=10.0.0\npyinstaller>=6.0.0\n")
-            line_cnt = sum(1 for _ in req_path.open(encoding="utf-8"))
-            self.after(0, lambda: self._status(f"已生成 requirements.txt（{line_cnt} 行）"))
+                f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
+                f.write("pillow>=10.0\npyinstaller>=6.0\n")
 
-            # ── 2) 清理旧 build/dist/spec 并创建隔离 venv ──────────────
-            for p in ("build", "dist"):
-                shutil.rmtree(project_root / p, ignore_errors=True)
-            for spec in project_root.glob("*.spec"):
-                spec.unlink(missing_ok=True)
-
+            # ── 4) 重建 venv 并安装依赖 ────────────────────────────
             if venv_dir.exists():
                 shutil.rmtree(venv_dir)
             subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
 
-            # ── 3) 安装依赖 ──────────────────────────────────────────
             self.after(0, lambda: self._status("安装依赖中，请稍候…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", str(req_path)])
 
-            # ── 4) 处理 macOS 图标（转换为 .icns） ────────────────────
+            # ── 5) 处理图标 (macOS 转 icns) ─────────────────────────
             icon_in = self.icon_ent.get().strip() or self.generated_icon
             if icon_in and platform.system() == "Darwin":
                 ip = Path(icon_in)
                 if ip.suffix.lower() != ".icns":
-                    self.after(0, lambda: self._status("正在转换 icon 为 .icns…"))
+                    self.after(0, lambda: self._status("转换 icon 为 .icns…"))
                     Image.open(ip).save(ip.with_suffix(".icns"))
                     icon_in = str(ip.with_suffix(".icns"))
 
-            # ── 5) 调 PyInstaller 打包 ────────────────────────────────
-            mac_onedir = platform.system() == "Darwin"
+            # ── 6) PyInstaller 打包 ─────────────────────────────────
             packer = PyInstallerPacker(
-                onefile=(False if mac_onedir else self.sw_one.get()),
+                onefile=(False if platform.system() == "Darwin" else self.sw_one.get()),
                 windowed=self.sw_win.get(),
                 clean=self.sw_clean.get(),
                 debug=self.sw_debug.get(),
@@ -1080,17 +1108,24 @@ class AIconPackGUI(ctk.CTk):
             )
             result = packer.pack(
                 script_path=script,
-                name=self.name_ent.get().strip() or Path(script).stem,
+                name=app_name,
                 icon=icon_in or None,
-                dist_dir=str(project_root / "dist"),
-                workpath=str(project_root / "build"),
-                spec_path=str(project_root),
-                hidden_imports=["PyQt6"]   # 双保险
+                dist_dir=dist_dir,
+                workpath=work_dir,
+                spec_path=spec_dir,
+                hidden_imports=["PyQt6"]
             )
 
-            # ── 6) 结果处理 ───────────────────────────────────────────
-            ok = result.returncode == 0
-            (project_root / "pack_log.txt").write_text(result.stdout + "\n" + result.stderr, "utf-8")
+            ok = (result.returncode == 0)
+
+            # ── 7) 如仅保留可执行 → 二次清理 ────────────────────────
+            if ok and self.sw_keep.get():
+                self._clean_artifacts(project_root, app_name, None)
+
+            # ── 8) 写日志 & 状态更新 ────────────────────────────────
+            (project_root / "pack_log.txt").write_text(
+                result.stdout + "\n" + result.stderr, "utf-8"
+            )
             self.after(0, lambda: self._status(
                 "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
 
@@ -1098,13 +1133,12 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda err=err: self._status(f"自动打包异常: {err}"))
 
         finally:
-            # 还原旧 requirements.txt（如有）
+            # 恢复用户原始 requirements.txt
             if req_backup.exists():
                 shutil.move(req_backup, req_path)
 
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
-
     # ---------- 设置 & 状态 ----------
     def apply_settings(self, cfg: dict):
         self.cfg = cfg; self._init_services()
