@@ -499,7 +499,7 @@ class AIconPackGUI(ctk.CTk):
     # ========== AI PAGE ==========
     def _build_ai_page(self):
         p = self.ai_tab
-        p.columnconfigure(1, weight=1);
+        p.columnconfigure(1, weight=1)
         p.rowconfigure(3, weight=1)
 
         # Prompt
@@ -521,19 +521,18 @@ class AIconPackGUI(ctk.CTk):
         self.size_opt.set("1024x1024")
         self.size_opt.grid(row=1, column=1, padx=10, pady=4)
 
-        # 导出尺寸（本地压缩）
+        # 导出尺寸
         ctk.CTkLabel(p, text="导出尺寸:", font=("", 12)).grid(
             row=1, column=2, sticky="e", padx=6)
-        self.outsize_opt = ctk.CTkOptionMenu(
-            p, values=["原始", "256", "512", "768"])
+        self.outsize_opt = ctk.CTkOptionMenu(p, values=["原始", "256", "512", "768"])
         self.outsize_opt.set("原始")
         self.outsize_opt.grid(row=1, column=3, padx=10, pady=4)
 
         # PNG 压缩
         ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(
             row=1, column=4, sticky="e", padx=6)
-        self.comp_slider = ctk.CTkSlider(
-            p, from_=0, to=9, number_of_steps=9, width=140)
+        self.comp_slider = ctk.CTkSlider(p, from_=0, to=9,
+                                         number_of_steps=9, width=140)
         self.comp_slider.set(6)
         self.comp_slider.grid(row=1, column=5, padx=18)
 
@@ -550,15 +549,20 @@ class AIconPackGUI(ctk.CTk):
             row=3, column=0, columnspan=7,
             sticky="nsew", padx=18, pady=(10, 16))
 
+        # 进度条
+        self.ai_bar = ctk.CTkProgressBar(p, mode="indeterminate")
+        self.ai_bar.grid(row=4, column=0, columnspan=7,
+                         sticky="ew", padx=18, pady=(0, 12))
+        self.ai_bar.stop()
+
     # ========== PACK PAGE (centered) ==========
     def _build_pack_page(self):
         p = self.pack_tab
-        # ── 让列 0、2 各占空白，列 1 放表单，达到居中效果 ──
         p.columnconfigure(0, weight=1)
         p.columnconfigure(2, weight=1)
 
         outer = ctk.CTkFrame(p, fg_color="transparent")
-        outer.grid(row=0, column=1, sticky="n", pady=12)  # column=1 → 居中
+        outer.grid(row=0, column=1, sticky="n", pady=12)
         outer.columnconfigure(1, weight=1)
 
         row = 0
@@ -568,7 +572,8 @@ class AIconPackGUI(ctk.CTk):
         self.script_ent = ctk.CTkEntry(outer, placeholder_text="app.py")
         self.script_ent.grid(row=row, column=1, sticky="ew", pady=8)
         ctk.CTkButton(outer, text="浏览", width=90,
-                      command=self._browse_script).grid(row=row, column=2, sticky="w", padx=10, pady=8)
+                      command=self._browse_script).grid(row=row, column=2,
+                                                        sticky="w", padx=10, pady=8)
 
         # 应用名称
         row += 1
@@ -586,11 +591,9 @@ class AIconPackGUI(ctk.CTk):
         self.sw_clean = ctk.CTkSwitch(swf, text="--clean")
         self.sw_debug = ctk.CTkSwitch(swf, text="--debug (可选)")
         self.sw_upx = ctk.CTkSwitch(swf, text="UPX (可选)")
-        # 第一行
         self.sw_one.grid(row=0, column=0, padx=12, pady=4, sticky="w")
         self.sw_win.grid(row=0, column=1, padx=12, pady=4, sticky="w")
         self.sw_clean.grid(row=0, column=2, padx=12, pady=4, sticky="w")
-        # 第二行
         self.sw_debug.grid(row=1, column=0, padx=12, pady=4, sticky="w")
         self.sw_upx.grid(row=1, column=1, padx=12, pady=4, sticky="w")
         for sw, tip in [
@@ -607,22 +610,25 @@ class AIconPackGUI(ctk.CTk):
 
         # 输出目录
         row += 1
-        ctk.CTkLabel(outer, text="输出目录(dist) (可选):", font=("", 12)).grid(
-            row=row, column=0, sticky="e", pady=8, padx=10)
+        ctk.CTkLabel(outer, text="输出目录(dist) (可选):",
+                     font=("", 12)).grid(row=row, column=0,
+                                         sticky="e", pady=8, padx=10)
         self.dist_ent = ctk.CTkEntry(outer, placeholder_text="dist")
         self.dist_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
         # hidden-imports
         row += 1
-        ctk.CTkLabel(outer, text="hidden-imports (可选):", font=("", 12)).grid(
-            row=row, column=0, sticky="e", pady=8, padx=10)
+        ctk.CTkLabel(outer, text="hidden-imports (可选):",
+                     font=("", 12)).grid(row=row, column=0,
+                                         sticky="e", pady=8, padx=10)
         self.hidden_ent = ctk.CTkEntry(outer, placeholder_text="pkg1,pkg2")
         self.hidden_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
         # add-data
         row += 1
-        ctk.CTkLabel(outer, text="add-data (可选):", font=("", 12)).grid(
-            row=row, column=0, sticky="e", pady=8, padx=10)
+        ctk.CTkLabel(outer, text="add-data (可选):",
+                     font=("", 12)).grid(row=row, column=0,
+                                         sticky="e", pady=8, padx=10)
         self.data_ent = ctk.CTkEntry(outer, placeholder_text="file.txt;data")
         self.data_ent.grid(row=row, column=1, columnspan=2, sticky="ew", pady=8)
 
@@ -632,6 +638,13 @@ class AIconPackGUI(ctk.CTk):
                                       height=46, command=self._start_pack)
         self.pack_btn.grid(row=row, column=0, columnspan=3,
                            sticky="ew", pady=18)
+
+        # 进度条
+        row += 1
+        self.pack_bar = ctk.CTkProgressBar(outer, mode="indeterminate")
+        self.pack_bar.grid(row=row, column=0, columnspan=3,
+                           sticky="ew", pady=(0, 12))
+        self.pack_bar.stop()
 
     # ---------- 生成线程 ----------
     def _start_generate(self):
@@ -644,21 +657,28 @@ class AIconPackGUI(ctk.CTk):
         comp = int(self.comp_slider.get())
 
         self.gen_btn.configure(state="disabled")
+        self.ai_bar.start()  # ← 开启进度条
         self._status("生成中…")
-        threading.Thread(target=self._gen_thread, args=(prompt, style, size, comp), daemon=True).start()
+        threading.Thread(target=self._gen_thread,
+                         args=(prompt, style, size, comp),
+                         daemon=True).start()
 
     def _gen_thread(self, prompt, style, size, comp):
         try:
-            icon_path = self.icon_gen.generate(prompt, style=style, size=size,
-                                               compress_level=comp, convert_to_ico=True)[0]
+            icon_path = self.icon_gen.generate(
+                prompt, style=style, size=size,
+                compress_level=comp, convert_to_ico=True
+            )[0]
             self.generated_icon = icon_path
             img = Image.open(icon_path)
-            cimg = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
+            cimg = ctk.CTkImage(img, size=(min(420, img.width),
+                                           min(420, img.height)))
             self.after(0, lambda: self._show_preview(cimg))
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
         finally:
             self.after(0, lambda: self.gen_btn.configure(state="normal"))
+            self.after(0, self.ai_bar.stop)
 
     def _show_preview(self, cimg):
         self.preview_lbl.configure(image=cimg, text=""); self.preview_img = cimg
@@ -680,8 +700,11 @@ class AIconPackGUI(ctk.CTk):
             return
 
         self.pack_btn.configure(state="disabled")
+        self.pack_bar.start()  # ← 开启进度条
         self._status("开始打包…")
-        threading.Thread(target=self._pack_thread, args=(script,), daemon=True).start()
+        threading.Thread(target=self._pack_thread,
+                         args=(script,),
+                         daemon=True).start()
 
     def _pack_thread(self, script):
         packer = PyInstallerPacker(
@@ -697,10 +720,13 @@ class AIconPackGUI(ctk.CTk):
                 name=self.name_ent.get().strip() or Path(script).stem,
                 icon=self.generated_icon,
                 dist_dir=self.dist_ent.get().strip() or None,
-                hidden_imports=[x.strip() for x in self.hidden_ent.get().split(",") if x.strip()] or None,
-                add_data=[self.data_ent.get().strip()] if self.data_ent.get().strip() else None
+                hidden_imports=[x.strip() for x in
+                                self.hidden_ent.get().split(",") if x.strip()] or None,
+                add_data=[self.data_ent.get().strip()]
+                if self.data_ent.get().strip() else None
             )
-            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, "utf-8")
+            Path("pack_log.txt").write_text(
+                result.stdout + "\n" + result.stderr, "utf-8")
             ok = result.returncode == 0
             txt = "打包成功！" if ok else "打包失败！查看 pack_log.txt"
             self.after(0, lambda: self._status(txt))
@@ -708,6 +734,7 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
+            self.after(0, self.pack_bar.stop)  # ← 停止进度条
 
     # ---------- 设置 & 状态 ----------
     def apply_settings(self, cfg: dict):
