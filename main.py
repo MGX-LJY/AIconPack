@@ -31,6 +31,7 @@ from tkinter import filedialog, messagebox, Toplevel, Label
 from openai import OpenAI, APIConnectionError, RateLimitError
 import shutil
 from PIL import Image, ImageDraw
+import tempfile
 
 # --------------------------------------------------------------------------- #
 # 1) AI 生成模块
@@ -95,59 +96,73 @@ class IconGenerator:
         compress_level: int | None = None,          # 0-9，None 表示不压缩
     ) -> List[Any]:
         """
+        调用 OpenAI 图像接口生成 icon。
+
         返回值依据 return_format：
         • "path"  →  [Path, ...]
         • "pil"   →  [PIL.Image.Image, ...]
         • "bytes" →  [bytes, ...]
         • "b64"   →  [str(base64), ...]
         """
-        # -- 检查 / 构建客户端 --
+        # ── 1) 检查 / 懒加载客户端 ─────────────────────────────────────
         if self._client is None:
             if not self.api_key:
                 raise RuntimeError("请先提供 OpenAI API Key")
             self._client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
-        # -- 尺寸校正 --
+        # ── 2) 分辨率容错（DALL·E 3 只能选固定分辨率） ───────────────
         if model == "dall-e-3" and size not in DALLE3_SIZES:
             size = "1024x1024"
 
-        # -- 拼 Prompt --
+        # ── 3) 组装 Prompt（可选模板 + 关键词） ──────────────────────
         full_prompt = (
-            self.templates.get(style, "{prompt}").format(prompt=prompt) if style else prompt
+            self.templates.get(style, "{prompt}").format(prompt=prompt)
+            if style else prompt
         )
         if extra_keywords:
             full_prompt += ", " + ", ".join(extra_keywords)
 
-        # -- 调用 OpenAI (带指数退避) --
+        # ── 4) 调用 OpenAI —— 兼容 DALL·E 3 n=1 限制 ───────────────
         retries = 0
+        all_data = []
+
+        # DALL·E 3 只能一次 n=1，需要循环调用；其他模型最多 n≤10
+        if model == "dall-e-3":
+            batch_size, batches = 1, n
+        else:
+            batch_size = min(max(n, 1), 10)
+            batches = 1
+
         while True:
             try:
-                rsp = self._client.images.generate(
-                    model=model,
-                    prompt=full_prompt,
-                    n=min(max(n, 1), 10),
-                    size=size,
-                    response_format="url",
-                )
+                for _ in range(batches):
+                    rsp = self._client.images.generate(
+                        model=model,
+                        prompt=full_prompt,
+                        n=batch_size,
+                        size=size,
+                        response_format="url",
+                    )
+                    all_data.extend(rsp.data)
                 break
             except (APIConnectionError, RateLimitError) as e:
                 retries += 1
                 if retries > self.max_retries:
                     raise RuntimeError(f"请求失败：{e}") from e
-                time.sleep(2 ** retries)
+                time.sleep(2 ** retries)  # 指数退避
 
-        # -- 下载 / 保存 --
+        # ── 5) 下载 / 保存 / 格式化输出 ────────────────────────────────
         out_dir = Path(output_dir).expanduser()
         out_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         prefix = filename_prefix or f"icon_{ts}"
 
         results: List[Any] = []
-        for idx, item in enumerate(rsp.data, 1):
+        for idx, item in enumerate(all_data, 1):
             img_bytes = requests.get(item.url, timeout=self.timeout).content
             img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
 
-            # ------ 根据格式返回 ------
+            # ---- 直接返回 ----
             if return_format == "pil":
                 results.append(img)
                 continue
@@ -158,18 +173,24 @@ class IconGenerator:
                 results.append(base64.b64encode(img_bytes).decode())
                 continue
 
-            # 默认保存文件
+            # ---- 保存到文件 ----
             name = f"{prefix}_{idx}.png" if n > 1 else f"{prefix}.png"
             png_path = out_dir / name
 
             save_kwargs = {}
             if isinstance(compress_level, int):
-                save_kwargs.update(optimize=True, compress_level=max(0, min(compress_level, 9)))
+                save_kwargs.update(
+                    optimize=True,
+                    compress_level=max(0, min(compress_level, 9))
+                )
 
             img.save(png_path, format="PNG", **save_kwargs)
 
             if convert_to_ico:
-                img.resize((256, 256)).save(png_path.with_suffix(".ico"), format="ICO")
+                img.resize((256, 256)).save(
+                    png_path.with_suffix(".ico"),
+                    format="ICO"
+                )
 
             results.append(png_path)
 
@@ -522,6 +543,27 @@ class AIconPackGUI(ctk.CTk):
         self.preview_img = cimg
         self.preview_lbl.configure(image=cimg, text="")
         self._status("已生成圆润版本")
+        self.icns_btn.configure(state="normal")
+
+    # ---------- PNG → ICNS ----------
+    def _png_to_icns(self):
+        """把当前 PNG 转成 macOS 专用 .icns，并写回 generated_icon"""
+        if not self.generated_icon or not self.generated_icon.suffix.lower() == ".png":
+            messagebox.showwarning("提示", "请先生成或导入 PNG 图标")
+            return
+
+        try:
+            img = Image.open(self.generated_icon)
+            # Pillow 直接保存 .icns（PyInstaller 6 支持）
+            icns_path = self.generated_icon.with_suffix(".icns")
+            img.save(icns_path)
+        except Exception as e:
+            messagebox.showerror("错误", f"转换失败: {e}")
+            return
+
+        self.generated_icon = icns_path
+        self._status(f"已生成 {icns_path.name}，可在『打包』页使用")
+        messagebox.showinfo("成功", f"已生成 {icns_path}")
 
     def _browse_icon(self):
         """手动选择 .ico / .png 作为打包图标"""
@@ -595,6 +637,13 @@ class AIconPackGUI(ctk.CTk):
             p, text="📂 导入图片", width=110, fg_color="#455A9C",
             command=self._import_image)
         self.import_btn.grid(row=row_btn, column=4, padx=6, pady=2)
+
+        self.icns_btn = ctk.CTkButton(
+            p, text="💾 转为 ICNS", width=110,
+            command=self._png_to_icns, fg_color="#2D7D46",
+            state="disabled"
+        )
+        self.icns_btn.grid(row=row_btn, column=5, padx=6, pady=2)
 
         # ── 预览区域 ───────────────────────────────────────────────────
         self.preview_lbl = ctk.CTkLabel(
@@ -777,11 +826,13 @@ class AIconPackGUI(ctk.CTk):
         self.preview_lbl.configure(image=cimg, text="")
         self.smooth_btn.configure(state="normal")        # 允许圆润
         self._status("已导入外部图片，可执行圆润处理")
+        self.icns_btn.configure(state="normal")   # 允许转 ICNS
 
     def _show_preview(self, cimg):
         self.preview_lbl.configure(image=cimg, text=""); self.preview_img = cimg
         self._status("生成完成，可前往『打包』页")
         self.smooth_btn.configure(state="normal")  # 启用“圆润处理”
+        self.icns_btn.configure(state="normal")   # 允许转 ICNS
 
     def _start_auto_pack(self):
         script = self.script_ent.get().strip()
