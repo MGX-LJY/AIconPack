@@ -396,7 +396,7 @@ class SettingsDialog(ctk.CTkToplevel):
     def __init__(self, master: "AIconPackGUI", cfg: dict):
         super().__init__(master)
         self.title("设置")
-        self.geometry("520x550")
+        self.geometry("520x620")          # 高度增加 70
         self.columnconfigure(0, weight=1)
         self.cfg = cfg
 
@@ -416,19 +416,31 @@ class SettingsDialog(ctk.CTkToplevel):
         self.base_ent.grid(row=3, column=0, sticky="ew", padx=20)
         _set_tip(self.base_ent, "若你使用代理 / 中转服务，可在此配置 Base URL。")
 
-        # 模板
+        # Prompt 模板
         ctk.CTkLabel(self, text="Prompt 模板 (JSON):", anchor="w", font=("", 14)).grid(
             row=4, column=0, sticky="w", padx=20, pady=(20, 6))
-        self.tpl_txt = ctk.CTkTextbox(self, height=240)
+        self.tpl_txt = ctk.CTkTextbox(self, height=200)
         self.tpl_txt.insert("1.0", json.dumps(cfg.get("templates", {}), ensure_ascii=False, indent=2))
         self.tpl_txt.grid(row=5, column=0, sticky="nsew", padx=20)
         self.rowconfigure(5, weight=1)
         _set_tip(self.tpl_txt, "键=模板名称，值=模板内容；使用 {prompt} 占位符。")
 
+        # 依赖分析模型
+        ctk.CTkLabel(self, text="依赖分析模型:", anchor="w", font=("", 14)).grid(
+            row=6, column=0, sticky="w", padx=20, pady=(20, 6))
+        self.model_opt = ctk.CTkOptionMenu(
+            self, values=["gpt-4o-mini", "gpt-4o", "gpt-4o-128k"])
+        self.model_opt.set(cfg.get("chat_model", "gpt-4o-mini"))
+        self.model_opt.grid(row=7, column=0, sticky="ew", padx=20)
+        _set_tip(self.model_opt, "用于扫描入口脚本并生成 requirements.txt")
+
         # 按钮
-        box = ctk.CTkFrame(self, fg_color="transparent"); box.grid(row=6, column=0, pady=18)
-        ctk.CTkButton(box, text="取消", width=110, command=self.destroy).grid(row=0, column=0, padx=(0, 12))
-        ctk.CTkButton(box, text="保存", width=130, command=self._save).grid(row=0, column=1)
+        box = ctk.CTkFrame(self, fg_color="transparent")
+        box.grid(row=8, column=0, pady=18)
+        ctk.CTkButton(box, text="取消", width=110, command=self.destroy).grid(
+            row=0, column=0, padx=(0, 12))
+        ctk.CTkButton(box, text="保存", width=130, command=self._save).grid(
+            row=0, column=1)
 
     def _save(self):
         try:
@@ -442,12 +454,12 @@ class SettingsDialog(ctk.CTkToplevel):
             "api_key": self.key_ent.get().strip(),
             "base_url": self.base_ent.get().strip(),
             "templates": tpl_dict,
+            "chat_model": self.model_opt.get(),        # 新增
         }
         _save_cfg(conf)
-        _export_cfg(conf)     # ☆ 每次保存同步写出 config.json
+        _export_cfg(conf)
         self.master.apply_settings(conf)
         self.destroy()
-
 
 # =============== 主 GUI =====================================================
 class AIconPackGUI(ctk.CTk):
@@ -490,11 +502,15 @@ class AIconPackGUI(ctk.CTk):
 
     # ---------- 服务 ----------
     def _init_services(self):
+        # 图像生成
         self.icon_gen = IconGenerator(
             api_key=self.cfg.get("api_key"),
             base_url=self.cfg.get("base_url"),
             prompt_templates=self.cfg.get("templates"),
         )
+        # 聊天模型（依赖分析用）
+        self.chat_model = self.cfg.get("chat_model", "gpt-4o-mini")
+        self._chat_client: Optional[OpenAI] = None      # 懒加载
 
     # ---------- 图标后处理 ----------
     def _smooth_icon(self):
@@ -537,6 +553,7 @@ class AIconPackGUI(ctk.CTk):
             return
         self.icon_ent.delete(0, "end")
         self.icon_ent.insert(0, str(self.generated_icon))
+
     # ========== AI PAGE ==========
     def _build_ai_page(self):
         """构建“AI 生成”标签页（布局已优化，窄窗口也能看到所有控件）"""
@@ -819,6 +836,56 @@ class AIconPackGUI(ctk.CTk):
 
         return sorted(pkgs)
 
+    def _detect_dependencies_ai(self, script: str) -> list[str]:
+        """
+        使用 OpenAI GPT 模型分析脚本依赖，生成包名列表并写入
+        requirements.txt；失败时回落到静态正则解析。
+        """
+        fallback = self._detect_dependencies(script)
+        try:
+            code_text = Path(script).read_text(encoding="utf-8")[:15000]
+        except Exception as e:
+            self._status(f"读取脚本失败，使用静态分析: {e}")
+            self._write_requirements(fallback)
+            return fallback
+
+        if self._chat_client is None:
+            self._chat_client = OpenAI(
+                api_key=self.cfg.get("api_key"),
+                base_url=self.cfg.get("base_url") or None,
+                timeout=60,
+            )
+
+        system_msg = (
+            "你是资深 Python 打包专家。请阅读用户给出的代码，并输出它运行所需在 "
+            "PyPI 可直接安装的第三方依赖包列表（只给包名，无版本号，按逗号分隔）。"
+            "标准库和相对导入请忽略。常见别名需映射到真实包名，例如 PIL→Pillow、"
+            "cv2→opencv-python、Crypto→pycryptodome。"
+        )
+
+        try:
+            rsp = self._chat_client.chat.completions.create(
+                model=self.chat_model,
+                messages=[
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": code_text},
+                ],
+                temperature=0.1,
+            )
+            reply = rsp.choices[0].message.content.strip()
+            pkgs = {re.split(r"[,\s]+", p)[0] for p in reply.split(",") if p.strip()}
+            pkgs = sorted(pkgs)
+            self._write_requirements(pkgs)
+            return pkgs if pkgs else fallback
+        except Exception as e:
+            self._status(f"AI 依赖分析失败，使用静态分析: {e}")
+            self._write_requirements(fallback)
+            return fallback
+
+    def _write_requirements(self, pkgs: list[str]):
+        """把依赖写入 requirements.txt（覆盖写）"""
+        Path("requirements.txt").write_text("\n".join(pkgs), encoding="utf-8")
+
     # ---------- 打包线程 ----------
     def _browse_script(self):
         p = filedialog.askopenfilename(filetypes=[("Python files", "*.py")])
@@ -891,19 +958,19 @@ class AIconPackGUI(ctk.CTk):
 
     def _auto_pack_thread(self, script: str):
         """
-        1) 解析依赖  → requirements
+        1) 使用 GPT 分析依赖 → requirements.txt
         2) 创建临时 venv (.aipack_venv)
-        3) pip install -r requirements
+        3) pip install -r requirements.txt
         4) 用 venv/python 调 PyInstaller
         """
         venv_dir = Path(".aipack_venv")
-        python_exe = venv_dir / "bin" / "python" if os.name != "nt" else venv_dir / "Scripts" / "python.exe"
+        python_exe = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         try:
             # ── 1. 解析依赖 ─────────────────────────
-            pkgs = self._detect_dependencies(script)
+            pkgs = self._detect_dependencies_ai(script)
             if not pkgs:
-                self.after(0, lambda: self._status("未检测到第三方依赖，改用系统环境打包"))
-                self.after(0, self._start_pack)    # fall-back
+                self.after(0, lambda: self._status("未检测到依赖，改用系统环境打包"))
+                self.after(0, self._start_pack)
                 return
 
             # ── 2. 创建 venv ────────────────────────
@@ -913,11 +980,8 @@ class AIconPackGUI(ctk.CTk):
 
             # ── 3. 安装依赖 ─────────────────────────
             self.after(0, lambda: self._status("安装依赖中…"))
-            subprocess.check_call([str(python_exe), "-m", "pip", "install",
-                                   "--upgrade", "pip"])
-            # ★ 这里固定 PyInstaller>=6，跳过旧版本的 Python 约束告警
-            subprocess.check_call([str(python_exe), "-m", "pip", "install",
-                                   "pyinstaller>=6", *pkgs])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller>=6", *pkgs])
 
             # ── 4. 调 PyInstaller ───────────────────
             self.after(0, lambda: self._status("依赖安装完成，开始打包…"))
@@ -927,7 +991,7 @@ class AIconPackGUI(ctk.CTk):
                 clean=self.sw_clean.get(),
                 debug=self.sw_debug.get(),
                 upx=self.sw_upx.get(),
-                pyinstaller_exe=str(python_exe)
+                pyinstaller_exe=str(python_exe),
             )
             result = packer.pack(
                 script_path=script,
@@ -937,26 +1001,19 @@ class AIconPackGUI(ctk.CTk):
                           if hasattr(self, "dist_ent") and self.dist_ent.get().strip()
                           else None),
                 hidden_imports=None,
-                add_data=None
+                add_data=None,
             )
-
             ok = result.returncode == 0
-
-            # -------- 清理 --------
             if ok and self.sw_keep.get():
                 shutil.rmtree("build", ignore_errors=True)
-                spec_name = (self.name_ent.get().strip()
-                             or Path(script).stem) + ".spec"
+                spec_name = (self.name_ent.get().strip() or Path(script).stem) + ".spec"
                 if Path(spec_name).exists():
                     Path(spec_name).unlink()
-
-            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr,
-                                            encoding="utf-8")
+            Path("pack_log.txt").write_text(result.stdout + "\n" + result.stderr, encoding="utf-8")
             self.after(0, lambda: self._status(
                 "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
-
         except Exception as e:
-            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
+            self.after(0, lambda: self._status(f"自动打包异常: {e}"))
         finally:
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
