@@ -1005,33 +1005,37 @@ class AIconPackGUI(ctk.CTk):
 
     def _auto_pack_thread(self, script: str):
         """
-        使用 pipreqs 生成 requirements.txt，再在独立 venv 中安装并打包
+        使用 pipreqs 自动生成 requirements.txt，
+        然后在隔离虚拟环境 (.aipack_venv) 中安装依赖并调用 PyInstaller 打包
         """
         venv_dir = Path(".aipack_venv")
         python_exe = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-
         project_root = Path(script).resolve().parent
 
         try:
-            # ── 0) 如已有 requirements.txt，先备份 ───────────────────
+            # 0) 如已有 requirements.txt，先备份
             req_backup = None
             if Path("requirements.txt").exists():
                 req_backup = Path("requirements.txt.bak")
                 shutil.copy("requirements.txt", req_backup)
 
-            # ── 1) 用当前解释器安装 / 调用 pipreqs 生成 requirements.txt ─
+            # 1) 安装并运行 pipreqs 生成新的 requirements.txt
             self.after(0, lambda: self._status("pipreqs 正在分析依赖…"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", "pipreqs>=0.4.13"])
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "--quiet", "pipreqs>=0.4.13"]
+            )
 
-            cmd = f"{shlex.quote(sys.executable)} -m pipreqs {shlex.quote(str(project_root))} " \
-                  f"--force --savepath requirements.txt --use-local"
-            subprocess.check_call(cmd, shell=True)
+            cmd = [
+                sys.executable, "-m", "pipreqs.pipreqs",
+                str(project_root),
+                "--force", "--savepath", "requirements.txt", "--use-local"
+            ]
+            subprocess.check_call(cmd)
 
-            # pipreqs 成功后可在状态栏提示行数
-            line_cnt = sum(1 for _ in Path("requirements.txt").open("r", encoding="utf-8"))
+            line_cnt = sum(1 for _ in Path("requirements.txt").open(encoding="utf-8"))
             self.after(0, lambda: self._status(f"已生成 requirements.txt（{line_cnt} 行）"))
 
-            # ── 2) 创建隔离 venv ───────────────────────────────────────
+            # 2) 创建隔离 venv 并安装依赖
             if venv_dir.exists():
                 shutil.rmtree(venv_dir)
             subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
@@ -1041,7 +1045,7 @@ class AIconPackGUI(ctk.CTk):
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", "requirements.txt"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller>=6"])
 
-            # ── 3) 调 PyInstaller 打包（原逻辑保持） ──────────────────
+            # 3) 调 PyInstaller 打包
             packer = PyInstallerPacker(
                 onefile=self.sw_one.get(), windowed=self.sw_win.get(),
                 clean=self.sw_clean.get(), debug=self.sw_debug.get(),
@@ -1059,7 +1063,8 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda: self._status("自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
 
         except subprocess.CalledProcessError as e:
-            self.after(0, lambda: self._status(f"自动打包异常: {e}"))
+            # 捕获子进程错误并抛到主线程
+            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
 
         finally:
             # 还原用户原先的 requirements.txt（若有）
