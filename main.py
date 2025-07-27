@@ -1376,38 +1376,40 @@ class AIconPackGUI(ctk.CTk):
 
     # ---------- 打包辅助：清理残留 ----------
     def pre_clean_artifacts(
-            self: Path,
-            app_name: str,
-            dist_path: Optional[str] = None
+        self,
+        project_root: Path,
+        app_name: str,
+        dist_path: Optional[str] = None
     ) -> None:
         """
         预清理：删除 build/、dist/、<app_name>.spec、.aipack_venv/、requirements.txt.bak
         """
         # 删除 build/
-        shutil.rmtree(self / "build", ignore_errors=True)
+        shutil.rmtree(project_root / "build", ignore_errors=True)
         # 删除 dist/
         if dist_path:
             shutil.rmtree(Path(dist_path), ignore_errors=True)
         else:
-            shutil.rmtree(self / "dist", ignore_errors=True)
+            shutil.rmtree(project_root / "dist", ignore_errors=True)
         # 删除 .spec 文件
-        (self / f"{app_name}.spec").unlink(missing_ok=True)
-        # 删除可能存在的虚拟环境目录
-        shutil.rmtree(self / ".aipack_venv", ignore_errors=True)
+        (project_root / f"{app_name}.spec").unlink(missing_ok=True)
+        # 删除虚拟环境目录
+        shutil.rmtree(project_root / ".aipack_venv", ignore_errors=True)
         # 删除依赖备份
-        (self / "requirements.txt.bak").unlink(missing_ok=True)
+        (project_root / "requirements.txt.bak").unlink(missing_ok=True)
 
     def clean_artifacts(
-            self: Path,
+            self,
+            project_root: Path,
             app_name: str
     ) -> None:
         """
         保留 dist：只删除 build/ 与 <app_name>.spec，保留 dist/ 目录
         """
         # 删除 build/
-        shutil.rmtree(self / "build", ignore_errors=True)
+        shutil.rmtree(project_root / "build", ignore_errors=True)
         # 删除 .spec 文件
-        (self / f"{app_name}.spec").unlink(missing_ok=True)
+        (project_root / f"{app_name}.spec").unlink(missing_ok=True)
 
     # ---------- 普通打包线程 ----------
     def _pack_thread(self, script: str, icon_path: Optional[str]):
@@ -1473,11 +1475,16 @@ class AIconPackGUI(ctk.CTk):
         - 如果项目根目录已有 requirements.txt，则默认使用它；
         - 否则走 pipreqs 扫描流程生成 requirements.txt。
         """
+        import platform
+        from PIL import Image
+        import subprocess
+        import shutil
+        import sys
 
         project_root = Path(script).resolve().parent
         app_name = self.name_ent.get().strip() or Path(script).stem
 
-        # 预定义各路径
+        # 各路径
         dist_dir = project_root / "dist"
         build_dir = project_root / "build"
         spec_dir = project_root
@@ -1487,16 +1494,18 @@ class AIconPackGUI(ctk.CTk):
         req_path = project_root / "requirements.txt"
         req_backup = project_root / "requirements.txt.bak"
 
+        # 保证 finally 中可用
+        using_existing = False
         try:
             # 0) 预清理旧产物
             self.pre_clean_artifacts(project_root, app_name)
 
-            # 1) 如果没有现成 requirements.txt，则使用 pipreqs 生成
+            # 1) 如果已有 requirements.txt 就跳过，否则生成
             using_existing = req_path.exists()
             if using_existing:
                 self.after(0, lambda: self._status("发现现有 requirements.txt，跳过依赖扫描"))
             else:
-                # 备份已有（空文件或旧内容）
+                # 备份旧文件（若存在且未备份）
                 if req_path.exists() and not req_backup.exists():
                     shutil.copy(req_path, req_backup)
 
@@ -1519,7 +1528,7 @@ class AIconPackGUI(ctk.CTk):
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--no-cache-dir", "-r", str(req_path)])
 
-            # 3) macOS：若有 PNG 图标则转 ICNS
+            # 3) macOS：若是 PNG 图标则转 ICNS
             icon_in = self.icon_ent.get().strip() or self.generated_icon
             if icon_in and platform.system() == "Darwin":
                 ip = Path(icon_in)
@@ -1563,7 +1572,7 @@ class AIconPackGUI(ctk.CTk):
         except subprocess.CalledProcessError as e:
             self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
         finally:
-            # 如果之前备份了旧的 requirements.txt，恢复它
+            # 恢复备份的 requirements.txt（仅在生成流程中备份过）
             if not using_existing and req_backup.exists():
                 shutil.move(req_backup, req_path)
             self.after(0, self.pack_bar.stop)
