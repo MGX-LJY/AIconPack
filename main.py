@@ -640,13 +640,6 @@ def _extend_arg(cmd: list[str], flag: str, values: Iterable[str] | None):
 # --------------------------------------------------------------------------- #
 # 3) GUI 模块（customtkinter 实现 · 超详细注释版）
 # --------------------------------------------------------------------------- #
-# 说明：
-# - 使用 customtkinter（ctk）实现现代化 UI，控件 API 与 Tkinter 接近。
-# - 注意线程模型：Tkinter/CTk 的**UI 更新必须在主线程完成**。
-#   本文件里凡是后台线程执行耗时任务（生成图像、打包），回到 UI 的更新都使用 `self.after(0, ...)`。
-# - 图像展示使用 ctk.CTkImage 包装 Pillow 的 Image 对象，**CTkImage 的 Python 变量引用必须保留**，
-#   否则可能被 GC 导致界面图片消失（本实现通过 `self.preview_img` 持有）。
-# --------------------------------------------------------------------------- #
 
 # =============== 简易悬浮注解组件 ==========================================
 class _ToolTip:
@@ -1030,13 +1023,8 @@ class AIconPackGUI(ctk.CTk):
         self.comp_slider.set(6)  # 默认中等压缩
         self.comp_slider.grid(row=1, column=5, padx=6)
 
-        # --- Row-2: 数量 + 操作按钮 -----------------------------------
+        # --- Row-2: 操作按钮 -------------------------------------------
         row_btn = 2
-        ctk.CTkLabel(p, text="数量:", font=("", 12)).grid(row=row_btn, column=0, sticky="e", padx=6)
-        self.count_opt = ctk.CTkOptionMenu(p, values=[str(i) for i in range(1, 11)])
-        self.count_opt.set("1")
-        self.count_opt.grid(row=row_btn, column=1, padx=6, pady=4)
-
         self.gen_btn = ctk.CTkButton(p, text="🎨 生成", width=110, command=self._start_generate)
         self.gen_btn.grid(row=row_btn, column=2, padx=6, pady=2)
 
@@ -1069,7 +1057,7 @@ class AIconPackGUI(ctk.CTk):
         self.ai_bar.grid(
             row=row_btn + 3, column=0, columnspan=11, sticky="ew", padx=18, pady=(0, 12)
         )
-        self.ai_bar.stop()  # 初始停止
+        self.ai_bar.stop()
 
     # ========== PACK PAGE ==========
     def _build_pack_page(self):
@@ -1190,49 +1178,45 @@ class AIconPackGUI(ctk.CTk):
     def _start_generate(self):
         """
         点击“生成”：
-        - 读取参数（Prompt/模板/分辨率/压缩/数量）；
-        - 禁用按钮、开启进度条；
-        - 启动后台线程 `_gen_thread()` 执行生成过程。
+        - 读取 Prompt、模板、分辨率、压缩等级；
+        - 禁用按钮、启动进度条；
+        - 启动后台线程 `_gen_thread()` 生成单张图标并替换预览。
         """
         prompt = self.prompt_ent.get().strip()
         if not prompt:
             messagebox.showwarning("提示", "请输入 Prompt")
             return
+
         style = None if self.style_opt.get() == "(无模板)" else self.style_opt.get()
         size = self.size_opt.get()
         comp = int(self.comp_slider.get())
-        count = int(self.count_opt.get())
 
+        # 不再读取数量，固定每次只生成 1 张
         self.gen_btn.configure(state="disabled")
         self.ai_bar.start()
         self._status("生成中…")
+
         threading.Thread(
             target=self._gen_thread,
-            args=(prompt, style, size, comp, count),
+            args=(prompt, style, size, comp),
             daemon=True
         ).start()
 
-    def _gen_thread(self, prompt, style, size, comp, count):
-        """
-        后台线程：调用 IconGenerator 生成图标并刷新 UI。
-        - 任何 UI 更新使用 `self.after(0, ...)` 投递到主线程。
-        - 首张图直接预览；多图时在状态栏提示保存目录。
-        """
+    def _gen_thread(self, prompt, style, size, comp):
         try:
             paths = self.icon_gen.generate(
-                prompt, style=style, size=size,
-                compress_level=comp, convert_to_ico=True, n=count
+                prompt,
+                style=style,
+                size=size,
+                compress_level=comp,
+                convert_to_ico=True,
+                n=1
             )
-            # 预览第一张
+            # 只需预览第一张
             self.generated_icon = paths[0]
             img = Image.open(paths[0])
             cimg = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
             self.after(0, lambda: self._show_preview(cimg))
-
-            if count > 1:
-                self.after(0, lambda: self._status(
-                    f"已批量生成 {count} 张，全部保存在 {Path(paths[0]).parent}"
-                ))
         except Exception as e:
             self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
         finally:
