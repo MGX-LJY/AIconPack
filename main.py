@@ -1470,16 +1470,9 @@ class AIconPackGUI(ctk.CTk):
     def _auto_pack_thread(self, script: str):
         """
         自动依赖打包流程（在隔离 venv 内完成）：
-        0) 预清理旧产物；
-        1) pipreqs 生成 requirements.txt；
-        2) 创建临时 venv 并安装依赖；
-        3) macOS 将 PNG 图标转 ICNS；
-        4) 用 venv 内的 PyInstaller 打包；
-        5) “仅保留可执行”时二次清理；
-        6) 恢复原 requirements.txt，写日志并更新状态。
+        - 如果项目根目录已有 requirements.txt，则默认使用它；
+        - 否则走 pipreqs 扫描流程生成 requirements.txt。
         """
-        import platform
-        from PIL import Image
 
         project_root = Path(script).resolve().parent
         app_name = self.name_ent.get().strip() or Path(script).stem
@@ -1498,21 +1491,25 @@ class AIconPackGUI(ctk.CTk):
             # 0) 预清理旧产物
             self.pre_clean_artifacts(project_root, app_name)
 
-            # 1) pipreqs：生成 requirements.txt
-            self.after(0, lambda: self._status("pipreqs 正在分析依赖…"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pipreqs>=0.4.13"])
-            subprocess.check_call([
-                sys.executable, "-m", "pipreqs.pipreqs", str(project_root),
-                "--force", "--savepath", str(req_path), "--use-local"
-            ])
-            # 追加关键依赖
-            with req_path.open("a", encoding="utf-8") as f:
-                f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
-                f.write("pillow>=10.0\npyinstaller>=6.0\n")
+            # 1) 如果没有现成 requirements.txt，则使用 pipreqs 生成
+            using_existing = req_path.exists()
+            if using_existing:
+                self.after(0, lambda: self._status("发现现有 requirements.txt，跳过依赖扫描"))
+            else:
+                # 备份已有（空文件或旧内容）
+                if req_path.exists() and not req_backup.exists():
+                    shutil.copy(req_path, req_backup)
 
-            # 备份原 requirements.txt（若存在）
-            if req_path.exists() and not req_backup.exists():
-                shutil.copy(req_path, req_backup)
+                self.after(0, lambda: self._status("pipreqs 正在分析依赖…"))
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pipreqs>=0.4.13"])
+                subprocess.check_call([
+                    sys.executable, "-m", "pipreqs.pipreqs", str(project_root),
+                    "--force", "--savepath", str(req_path), "--use-local"
+                ])
+                # 追加关键依赖
+                with req_path.open("a", encoding="utf-8") as f:
+                    f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
+                    f.write("pillow>=10.0\npyinstaller>=6.0\n")
 
             # 2) 创建隔离 venv 并安装依赖
             if venv_dir.exists():
@@ -1520,7 +1517,7 @@ class AIconPackGUI(ctk.CTk):
             subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
             self.after(0, lambda: self._status("安装依赖中，请稍候…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", str(req_path)])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--no-cache-dir", "-r", str(req_path)])
 
             # 3) macOS：若有 PNG 图标则转 ICNS
             icon_in = self.icon_ent.get().strip() or self.generated_icon
@@ -1566,8 +1563,8 @@ class AIconPackGUI(ctk.CTk):
         except subprocess.CalledProcessError as e:
             self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
         finally:
-            # 恢复用户原 requirements.txt（若存在备份）
-            if req_backup.exists():
+            # 如果之前备份了旧的 requirements.txt，恢复它
+            if not using_existing and req_backup.exists():
                 shutil.move(req_backup, req_path)
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
