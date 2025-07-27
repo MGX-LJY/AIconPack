@@ -740,59 +740,46 @@ class SettingsDialog(ctk.CTkToplevel):
     “设置”对话框：
     - 负责配置 OpenAI API Key、Base URL、Prompt 模板（JSON）；
     - 点击“保存”后立刻持久化并通知主窗口更新服务实例。
-
-    生命周期：
-    - 使用 `ctk.CTkToplevel`，由主窗体创建与持有；
-    - 关闭时只销毁该 Toplevel，不退出整个应用。
     """
-
     def __init__(self, master: "AIconPackGUI", cfg: dict):
         super().__init__(master)
         self.title("设置")
         self.geometry("520x550")
         self.master: "AIconPackGUI" = master
         self.columnconfigure(0, weight=1)
+        self.rowconfigure(5, weight=1)  # 让 JSON 文本框可拉伸
         self.cfg = cfg  # 当前配置快照（初始填充到输入框）
 
-        # ----------------- API Key -----------------
-        ctk.CTkLabel(self, text="OpenAI API Key:", anchor="w", font=("", 14)).grid(
-            row=0, column=0, sticky="w", padx=20, pady=(22, 6))
-        # 使用 show="•" 隐藏明文
+        # ——— API Key —
+        ctk.CTkLabel(self, text="OpenAI API Key:", anchor="w", font=("", 14))\
+            .grid(row=0, column=0, sticky="w", padx=20, pady=(22, 6))
         self.key_ent = ctk.CTkEntry(self, placeholder_text="sk-...", show="•")
         self.key_ent.insert(0, cfg.get("api_key", ""))
         self.key_ent.grid(row=1, column=0, sticky="ew", padx=20)
         _set_tip(self.key_ent, "填写你的 OpenAI 密钥。留空则无法生成图标。")
 
-        # ----------------- Base URL ----------------
-        ctk.CTkLabel(self, text="API Base URL (可选):", anchor="w", font=("", 14)).grid(
-            row=2, column=0, sticky="w", padx=20, pady=(20, 6))
+        # ——— Base URL —
+        ctk.CTkLabel(self, text="API Base URL (可选):", anchor="w", font=("", 14))\
+            .grid(row=2, column=0, sticky="w", padx=20, pady=(20, 6))
         self.base_ent = ctk.CTkEntry(self, placeholder_text="https://api.xxx.com/v1")
         self.base_ent.insert(0, cfg.get("base_url", ""))
         self.base_ent.grid(row=3, column=0, sticky="ew", padx=20)
         _set_tip(self.base_ent, "若你使用代理 / 中转服务，可在此配置 Base URL。")
 
-        # ----------------- Prompt 模板（JSON） -----
-        ctk.CTkLabel(self, text="Prompt 模板 (JSON):", anchor="w", font=("", 14)).grid(
-            row=4, column=0, sticky="w", padx=20, pady=(20, 6))
+        # ——— Prompt 模板（JSON） —
+        ctk.CTkLabel(self, text="Prompt 模板 (JSON):", anchor="w", font=("", 14))\
+            .grid(row=4, column=0, sticky="w", padx=20, pady=(20, 6))
         self.tpl_txt = ctk.CTkTextbox(self, height=240)
-        self.tpl_txt.insert(
-            "1.0",
-            json.dumps(cfg.get("templates", {}), ensure_ascii=False, indent=2)
-        )
+        self.tpl_txt.insert("1.0", json.dumps(cfg.get("templates", {}), ensure_ascii=False, indent=2))
         self.tpl_txt.grid(row=5, column=0, sticky="nsew", padx=20)
-        # 使文本框所在 row 可扩展，窗口放大时能拉伸
-        self.rowconfigure(5, weight=1)
-        _set_tip(self.tpl_txt, "键=模板名称，值=模板内容；使用 {prompt} 占位符。")
 
-        # ----------------- 操作按钮 -----------------
-        box = ctk.CTkFrame(self, fg_color="transparent")
-        box.grid(row=6, column=0, pady=18)
-        ctk.CTkButton(box, text="取消", width=110, command=self.destroy).grid(
-            row=0, column=0, padx=(0, 12)
-        )
-        ctk.CTkButton(box, text="保存", width=130, command=self._save).grid(
-            row=0, column=1
-        )
+        # ——— 操作按钮（取消 / 保存） —
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=6, column=0, pady=18, sticky="e", padx=20)
+        ctk.CTkButton(btn_frame, text="取消", width=110, command=self.destroy)\
+            .grid(row=0, column=0, padx=(0, 12))
+        ctk.CTkButton(btn_frame, text="保存", width=110, command=self._save)\
+            .grid(row=0, column=1)
 
     def _save(self):
         """
@@ -816,13 +803,10 @@ class SettingsDialog(ctk.CTkToplevel):
             "base_url": self.base_ent.get().strip(),
             "templates": tpl_dict,
         }
-        # 持久化 + 导出
         _save_cfg(conf)
         _export_cfg(conf)
-        # 通知主窗体刷新内部服务（例如重建 IconGenerator）
         self.master.apply_settings(conf)
         self.destroy()
-
 
 # =============== 主 GUI =====================================================
 class AIconPackGUI(ctk.CTk):
