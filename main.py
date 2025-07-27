@@ -1033,12 +1033,12 @@ class AIconPackGUI(ctk.CTk):
     # ---------- 自动依赖 + 打包线程（最终修正版） ----------
     def _auto_pack_thread(self, script: str):
         """
-        0 预清理旧 build / dist / *.spec / 旧 venv
-        1 pipreqs 生成 requirements.txt（追加 PyQt6 等硬依赖）
+        0 预清理旧 build / dist / *.spec
+        1 pipreqs 生成 requirements.txt（并追加 PyQt6 等硬依赖）
         2 创建隔离 venv 安装依赖
         3 macOS 转换 icon 为 .icns
         4 调 PyInstaller 打包（mac 强制 onedir 以免 Gatekeeper 报错）
-        5 若勾选「仅保留可执行」→ 删除 build/ 与 *.spec
+        5 仅当勾选「仅保留可执行」→ 删除 build/ 与 *.spec
         6 恢复用户原始 requirements.txt（若存在），更新状态 & 日志
         """
 
@@ -1058,51 +1058,40 @@ class AIconPackGUI(ctk.CTk):
         req_path   = project_root / "requirements.txt"
         req_backup = project_root / "requirements.txt.bak"
 
-        # ---------- pipreqs 选项 ----------
-        IGNORE_LIST = ".git,build,dist,node_modules,.venv,.aipack_venv,__pycache__"
-
         try:
-            # ── 0) 预清理旧 build / dist / *.spec / 旧 venv ─────────────
+            # ── 0) 预清理旧 build / dist / *.spec ───────────────────
             shutil.rmtree(build_dir, ignore_errors=True)
             shutil.rmtree(dist_dir,  ignore_errors=True)
-            shutil.rmtree(venv_dir,  ignore_errors=True)
             for spec in spec_dir.glob("*.spec"):
                 spec.unlink(missing_ok=True)
 
-            # ── 1) pipreqs 生成依赖清单 ───────────────────────────────
+            # ── 1) pipreqs 生成依赖清单 ─────────────────────────────
             self.after(0, lambda: self._status("pipreqs 正在分析依赖…"))
-            # 安装（若环境里没有）pipreqs
-            subprocess.check_call(
-                [sys.executable, "-m", "pip", "install", "-q", "pipreqs>=0.4.13"]
-            )
-            # 运行 pipreqs，忽略冗余目录 & 不跟随符号链接
-            subprocess.check_call(
-                [
-                    sys.executable, "-m", "pipreqs.pipreqs", str(project_root),
-                    "--force", "--savepath", str(req_path), "--use-local",
-                    "--no-follow-links",
-                    "--ignore", IGNORE_LIST
-                ],
-                timeout=300   # 防止极端情况下卡死 >5 分钟
-            )
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pipreqs>=0.4.13"])
+            subprocess.check_call([
+                sys.executable, "-m", "pipreqs.pipreqs", str(project_root),
+                "--force", "--savepath", str(req_path), "--use-local"
+            ])
 
             # 追加关键依赖
-            with req_path.open("a", encoding="utf-8", newline="\n") as f:
+            with req_path.open("a", encoding="utf-8") as f:
                 f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
                 f.write("pillow>=10.0\npyinstaller>=6.0\n")
 
             # 备份旧 requirements（方便还原）
-            if not req_backup.exists() and req_path.exists():
+            if not req_backup.exists() and (req_path.exists()):
                 shutil.copy(req_path, req_backup)
 
-            # ── 2) 创建 venv & 安装依赖 ───────────────────────────────
+            # ── 2) 创建 venv & 安装依赖 ─────────────────────────────
+            if venv_dir.exists():
+                shutil.rmtree(venv_dir)
             subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
 
             self.after(0, lambda: self._status("安装依赖中，请稍候…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", str(req_path)])
 
-            # ── 3) macOS icon → .icns ───────────────────────────────
+            # ── 3) macOS icon → .icns ────────────────────────────
             icon_in = self.icon_ent.get().strip() or self.generated_icon
             if icon_in and platform.system() == "Darwin":
                 ip = Path(icon_in)
@@ -1111,7 +1100,7 @@ class AIconPackGUI(ctk.CTk):
                     Image.open(ip).save(ip.with_suffix(".icns"))
                     icon_in = str(ip.with_suffix(".icns"))
 
-            # ── 4) 调 PyInstaller 打包 ───────────────────────────────
+            # ── 4) 调 PyInstaller 打包 ─────────────────────────────
             packer = PyInstallerPacker(
                 onefile=(False if platform.system() == "Darwin" else self.sw_one.get()),
                 windowed=self.sw_win.get(),
@@ -1132,23 +1121,22 @@ class AIconPackGUI(ctk.CTk):
 
             ok = (result.returncode == 0)
 
-            # ── 5) 若勾选「仅保留可执行」→ 删除 build/ + *.spec ───────
+            # ── 5) 用户勾选「仅保留可执行」→ 删除 build/ + *.spec ───
             if ok and self.sw_keep.get():
                 shutil.rmtree(build_dir, ignore_errors=True)
                 for spec in spec_dir.glob("*.spec"):
                     spec.unlink(missing_ok=True)
 
-            # ── 6) 写日志 & 更新状态 ─────────────────────────────────
+            # ── 6) 日志 & 状态 ───────────────────────────────────
             (project_root / "pack_log.txt").write_text(
                 result.stdout + "\n" + result.stderr, "utf-8"
             )
             self.after(0, lambda: self._status(
                 "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
 
-        except subprocess.TimeoutExpired:
-            self.after(0, lambda: self._status("pipreqs 超时，依赖分析失败"))
         except subprocess.CalledProcessError as err:
             self.after(0, lambda err=err: self._status(f"自动打包异常: {err}"))
+
         finally:
             # 恢复旧 requirements.txt（若存在备份）
             if req_backup.exists():
