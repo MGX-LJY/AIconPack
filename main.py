@@ -1476,7 +1476,8 @@ class AIconPackGUI(ctk.CTk):
         自动依赖打包流程（在隔离 venv 内完成）：
         - 如果项目根目录已有 requirements.txt，就跳过扫描；
         - 否则用 pipreqs 生成；
-        - 在 venv 中安装依赖并调用 PyInstaller；
+        - 在 venv 中安装依赖并显式安装 PyInstaller；
+        - 调用 PyInstaller 打包；
         - 无论成功或失败，都更新状态并恢复按钮/进度条。
         """
         import platform
@@ -1508,17 +1509,15 @@ class AIconPackGUI(ctk.CTk):
                 if req_path.exists() and not req_backup.exists():
                     shutil.copy(req_path, req_backup)
                 self.after(0, lambda: self._status("分析依赖…"))
-                # 安装 pipreqs
                 subprocess.check_call(
                     [sys.executable, "-m", "pip", "install", "pipreqs>=0.4.13"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
-                # 生成依赖文件
                 subprocess.check_call([
                     sys.executable, "-m", "pipreqs", str(project_root),
                     "--force", "--savepath", str(req_path), "--use-local"
                 ])
-                # 补充关键依赖
+                # 补充关键依赖（包括 pyinstaller）
                 with req_path.open("a", encoding="utf-8") as f:
                     f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
                     f.write("pillow>=10.0\npyinstaller>=6.0\n")
@@ -1533,6 +1532,10 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda: self._status("安装依赖…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", str(req_path)])
+
+            # —— **新增：显式安装 PyInstaller** ——
+            self.after(0, lambda: self._status("安装 PyInstaller…"))
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller>=6.0"])
 
             # 4) macOS 图标转换（可选）
             icon_in = self.icon_ent.get().strip() or str(self.generated_icon or "")
@@ -1575,13 +1578,10 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda: self._status("自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
 
         except Exception as e:
-            # 捕获所有异常，避免线程悄悄挂掉
             self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
         finally:
-            # 恢复备份的 requirements.txt（若在本次流程中备份过）
             if not using_existing and req_backup.exists():
                 shutil.move(req_backup, req_path)
-            # 停止进度条 & 恢复按钮
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
 
