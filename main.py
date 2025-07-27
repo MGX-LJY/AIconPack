@@ -964,19 +964,17 @@ class AIconPackGUI(ctk.CTk):
             return
         self.icon_ent.delete(0, "end")
         self.icon_ent.insert(0, str(self.generated_icon))
-
     # ========== AI PAGE ==========
     def _build_ai_page(self):
         """
         构建“AI 生成”标签页：
-        - Prompt 输入、模板选择、分辨率、PNG 压缩、数量；
+        - Prompt 输入、模板选择、分辨率、PNG 压缩、输出目录选择；
         - 操作按钮：生成 / 圆润处理 / 导入图片 / 转为 ICNS；
         - 预览区域与进度条。
-        - 布局策略：尽量在窄窗口下也能看到所有控件（将按钮独立成一行）。
         """
         p = self.ai_tab
         p.columnconfigure(1, weight=1)  # 主输入列可伸缩
-        p.rowconfigure(5, weight=1)  # 预览区域可伸缩
+        p.rowconfigure(6, weight=1)     # 预览区域可伸缩
 
         # --- Row-0: Prompt --------------------------------------------
         ctk.CTkLabel(p, text="Prompt:", font=("", 14)).grid(
@@ -987,7 +985,7 @@ class AIconPackGUI(ctk.CTk):
             row=0, column=1, columnspan=10, sticky="ew", padx=18, pady=(16, 6)
         )
 
-        # --- Row-1: 模板 + 尺寸 + 压缩滑块 -----------------------------
+        # --- Row-1: 模板 + 分辨率 + 压缩滑块 -----------------------------
         ctk.CTkLabel(p, text="模板:", font=("", 12)).grid(row=1, column=0, sticky="e", padx=6)
         self.style_opt = ctk.CTkOptionMenu(
             p, values=["(无模板)"] + self.icon_gen.list_templates()
@@ -1004,44 +1002,113 @@ class AIconPackGUI(ctk.CTk):
 
         ctk.CTkLabel(p, text="PNG 压缩:", font=("", 12)).grid(row=1, column=4, sticky="e", padx=6)
         self.comp_slider = ctk.CTkSlider(p, from_=0, to=9, number_of_steps=9, width=150)
-        self.comp_slider.set(6)  # 默认中等压缩
+        self.comp_slider.set(6)
         self.comp_slider.grid(row=1, column=5, padx=6)
 
-        # --- Row-2: 操作按钮 -------------------------------------------
-        row_btn = 2
+        # --- Row-2: 输出目录选择 ---------------------------------------
+        row_dir = 2
+        ctk.CTkLabel(p, text="输出目录:", font=("", 12)).grid(row=row_dir, column=0, sticky="e", padx=6)
+        self.output_dir_ent = ctk.CTkEntry(p, placeholder_text="（默认 ~/.aiconpack/icons）")
+        self.output_dir_ent.grid(row=row_dir, column=1, columnspan=4, sticky="ew", padx=6)
+        ctk.CTkButton(
+            p, text="浏览…", width=70, command=self._browse_output_dir
+        ).grid(row=row_dir, column=5, padx=6)
+
+        # --- Row-3: 操作按钮 -------------------------------------------
+        row_btn = 3
         self.gen_btn = ctk.CTkButton(p, text="🎨 生成", width=110, command=self._start_generate)
-        self.gen_btn.grid(row=row_btn, column=2, padx=6, pady=2)
+        self.gen_btn.grid(row=row_btn, column=2, padx=6, pady=12)
 
         self.smooth_btn = ctk.CTkButton(
             p, text="✨ 圆润处理", width=110, command=self._smooth_icon, state="disabled"
         )
-        self.smooth_btn.grid(row=row_btn, column=3, padx=6, pady=2)
+        self.smooth_btn.grid(row=row_btn, column=3, padx=6, pady=12)
 
         self.import_btn = ctk.CTkButton(
             p, text="📂 导入图片", width=110, fg_color="#455A9C", command=self._import_image
         )
-        self.import_btn.grid(row=row_btn, column=4, padx=6, pady=2)
+        self.import_btn.grid(row=row_btn, column=4, padx=6, pady=12)
 
         self.icns_btn = ctk.CTkButton(
             p, text="💾 转为 ICNS", width=110, command=self._png_to_icns,
             fg_color="#2D7D46", state="disabled"
         )
-        self.icns_btn.grid(row=row_btn, column=5, padx=6, pady=2)
+        self.icns_btn.grid(row=row_btn, column=5, padx=6, pady=12)
 
         # --- 预览区域 --------------------------------------------------
         self.preview_lbl = ctk.CTkLabel(
             p, text="预览区域", fg_color="#151515", width=520, height=380, corner_radius=8
         )
         self.preview_lbl.grid(
-            row=row_btn + 2, column=0, columnspan=11, sticky="nsew", padx=18, pady=(10, 16)
+            row=row_btn + 1, column=0, columnspan=11, sticky="nsew", padx=18, pady=(4, 12)
         )
 
         # --- 进度条 ----------------------------------------------------
         self.ai_bar = ctk.CTkProgressBar(p, mode="indeterminate")
         self.ai_bar.grid(
-            row=row_btn + 3, column=0, columnspan=11, sticky="ew", padx=18, pady=(0, 12)
+            row=row_btn + 2, column=0, columnspan=11, sticky="ew", padx=18, pady=(0, 12)
         )
         self.ai_bar.stop()
+
+    def _browse_output_dir(self):
+        """
+        弹出目录选择对话框，让用户指定生成图标的输出目录。
+        """
+        directory = filedialog.askdirectory()
+        if directory:
+            self.output_dir_ent.delete(0, "end")
+            self.output_dir_ent.insert(0, directory)
+
+    def _start_generate(self):
+        """
+        点击“生成”：
+        - 读取 Prompt、模板、分辨率、压缩等级、输出目录；
+        - 禁用按钮、启动进度条；
+        - 后台线程 `_gen_thread()` 生成单张图标并替换预览。
+        """
+        prompt = self.prompt_ent.get().strip()
+        if not prompt:
+            messagebox.showwarning("提示", "请输入 Prompt")
+            return
+
+        style = None if self.style_opt.get() == "(无模板)" else self.style_opt.get()
+        size = self.size_opt.get()
+        comp = int(self.comp_slider.get())
+        out_dir = self.output_dir_ent.get().strip() or None
+
+        self.gen_btn.configure(state="disabled")
+        self.ai_bar.start()
+        self._status("生成中…")
+
+        threading.Thread(
+            target=self._gen_thread,
+            args=(prompt, style, size, comp, out_dir),
+            daemon=True
+        ).start()
+
+    def _gen_thread(self, prompt, style, size, comp, out_dir):
+        """
+        后台线程：调用 IconGenerator.generate 生成图标并刷新 UI。
+        """
+        try:
+            paths = self.icon_gen.generate(
+                prompt,
+                style=style,
+                size=size,
+                compress_level=comp,
+                convert_to_ico=True,
+                n=1,
+                output_dir=out_dir
+            )
+            self.generated_icon = paths[0]
+            img = Image.open(paths[0])
+            cimg = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
+            self.after(0, lambda: self._show_preview(cimg))
+        except Exception as e:
+            self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
+        finally:
+            self.after(0, lambda: self.gen_btn.configure(state="normal"))
+            self.after(0, self.ai_bar.stop)
 
     # ========== PACK PAGE ==========
     def _build_pack_page(self):
