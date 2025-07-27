@@ -1559,7 +1559,7 @@ class AIconPackGUI(ctk.CTk):
 
             # 5) 仅保留可执行：删除 build/ 和 .spec，保留 dist/
             if ok and self.sw_keep.get():
-                self.clean_artifacts(project_root)
+                self.clean_artifacts(project_root, app_name)
 
             # 6) 写日志并更新状态
             (project_root / "pack_log.txt").write_text(
