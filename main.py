@@ -1059,57 +1059,6 @@ class AIconPackGUI(ctk.CTk):
             self.output_dir_ent.delete(0, "end")
             self.output_dir_ent.insert(0, directory)
 
-    def _start_generate(self):
-        """
-        点击“生成”：
-        - 读取 Prompt、模板、分辨率、压缩等级、输出目录；
-        - 禁用按钮、启动进度条；
-        - 后台线程 `_gen_thread()` 生成单张图标并替换预览。
-        """
-        prompt = self.prompt_ent.get().strip()
-        if not prompt:
-            messagebox.showwarning("提示", "请输入 Prompt")
-            return
-
-        style = None if self.style_opt.get() == "(无模板)" else self.style_opt.get()
-        size = self.size_opt.get()
-        comp = int(self.comp_slider.get())
-        out_dir = self.output_dir_ent.get().strip() or None
-
-        self.gen_btn.configure(state="disabled")
-        self.ai_bar.start()
-        self._status("生成中…")
-
-        threading.Thread(
-            target=self._gen_thread,
-            args=(prompt, style, size, comp, out_dir),
-            daemon=True
-        ).start()
-
-    def _gen_thread(self, prompt, style, size, comp, out_dir):
-        """
-        后台线程：调用 IconGenerator.generate 生成图标并刷新 UI。
-        """
-        try:
-            paths = self.icon_gen.generate(
-                prompt,
-                style=style,
-                size=size,
-                compress_level=comp,
-                convert_to_ico=True,
-                n=1,
-                output_dir=out_dir
-            )
-            self.generated_icon = paths[0]
-            img = Image.open(paths[0])
-            cimg = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
-            self.after(0, lambda: self._show_preview(cimg))
-        except Exception as e:
-            self.after(0, lambda err=e: self._status(f"生成失败: {err}"))
-        finally:
-            self.after(0, lambda: self.gen_btn.configure(state="normal"))
-            self.after(0, self.ai_bar.stop)
-
     # ========== PACK PAGE ==========
     def _build_pack_page(self):
         """
@@ -1229,9 +1178,9 @@ class AIconPackGUI(ctk.CTk):
     def _start_generate(self):
         """
         点击“生成”：
-        - 读取 Prompt、模板、分辨率、压缩等级；
+        - 读取 Prompt、模板、分辨率、压缩等级、输出目录；
         - 禁用按钮、启动进度条；
-        - 启动后台线程 `_gen_thread()` 生成单张图标并替换预览。
+        - 后台线程 `_gen_thread()` 生成单张图标并替换预览。
         """
         prompt = self.prompt_ent.get().strip()
         if not prompt:
@@ -1241,19 +1190,22 @@ class AIconPackGUI(ctk.CTk):
         style = None if self.style_opt.get() == "(无模板)" else self.style_opt.get()
         size = self.size_opt.get()
         comp = int(self.comp_slider.get())
+        out_dir = self.output_dir_ent.get().strip() or None
 
-        # 不再读取数量，固定每次只生成 1 张
         self.gen_btn.configure(state="disabled")
         self.ai_bar.start()
         self._status("生成中…")
 
         threading.Thread(
             target=self._gen_thread,
-            args=(prompt, style, size, comp),
+            args=(prompt, style, size, comp, out_dir),
             daemon=True
         ).start()
 
-    def _gen_thread(self, prompt, style, size, comp):
+    def _gen_thread(self, prompt, style, size, comp, out_dir):
+        """
+        后台线程：调用 IconGenerator.generate 生成图标并刷新 UI。
+        """
         try:
             paths = self.icon_gen.generate(
                 prompt,
@@ -1261,9 +1213,9 @@ class AIconPackGUI(ctk.CTk):
                 size=size,
                 compress_level=comp,
                 convert_to_ico=True,
-                n=1
+                n=1,
+                output_dir=out_dir
             )
-            # 只需预览第一张
             self.generated_icon = paths[0]
             img = Image.open(paths[0])
             cimg = ctk.CTkImage(img, size=(min(420, img.width), min(420, img.height)))
