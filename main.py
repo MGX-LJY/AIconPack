@@ -785,7 +785,7 @@ class SettingsDialog(ctk.CTkToplevel):
         _set_tip(self.tpl_txt, "键=模板名称，值=模板内容；使用 {prompt} 占位符。")
 
         # ----------------- 操作按钮 -----------------
-        box = ctk.CTkFrame(self, fg_color="透明")
+        box = ctk.CTkFrame(self, fg_color="transparent")
         box.grid(row=6, column=0, pady=18)
         ctk.CTkButton(box, text="取消", width=110, command=self.destroy).grid(
             row=0, column=0, padx=(0, 12)
