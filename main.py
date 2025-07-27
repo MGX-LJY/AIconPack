@@ -1404,12 +1404,14 @@ class AIconPackGUI(ctk.CTk):
             app_name: str
     ) -> None:
         """
-        保留 dist：只删除 build/ 与 <app_name>.spec，保留 dist/ 目录
+        保留 dist：只删除 build/、<app_name>.spec 和 .aipack_venv，保留 dist/ 目录
         """
         # 删除 build/
         shutil.rmtree(project_root / "build", ignore_errors=True)
         # 删除 .spec 文件
         (project_root / f"{app_name}.spec").unlink(missing_ok=True)
+        # 删除临时虚拟环境
+        shutil.rmtree(project_root / ".aipack_venv", ignore_errors=True)
 
     # ---------- 普通打包线程 ----------
     def _pack_thread(self, script: str, icon_path: Optional[str]):
