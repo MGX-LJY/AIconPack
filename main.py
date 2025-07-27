@@ -1264,6 +1264,7 @@ class AIconPackGUI(ctk.CTk):
         """
         点击“自动依赖打包”：
         - 校验入口脚本；
+        - 检查项目目录可写性；
         - 禁用按钮、启动进度条；
         - 后台线程执行 `_auto_pack_thread()` 。
         """
@@ -1272,10 +1273,22 @@ class AIconPackGUI(ctk.CTk):
             messagebox.showerror("错误", "请选择有效的入口脚本")
             return
 
+        project_root = Path(script).resolve().parent
+        if not os.access(project_root, os.W_OK):
+            messagebox.showerror(
+                "错误",
+                f"没有权限在目录\n{project_root}\n下创建虚拟环境，请选择有写权限的项目目录"
+            )
+            return
+
         self.auto_pack_btn.configure(state="disabled")
         self.pack_bar.start()
         self._status("准备自动打包…")
-        threading.Thread(target=self._auto_pack_thread, args=(script,), daemon=True).start()
+        threading.Thread(
+            target=self._auto_pack_thread,
+            args=(script,),
+            daemon=True
+        ).start()
 
     def _detect_dependencies(self, script: str) -> list[str]:
         """
@@ -1461,72 +1474,77 @@ class AIconPackGUI(ctk.CTk):
     def _auto_pack_thread(self, script: str):
         """
         自动依赖打包流程（在隔离 venv 内完成）：
-        - 如果项目根目录已有 requirements.txt，则默认使用它；
-        - 否则走 pipreqs 扫描流程生成 requirements.txt。
+        - 如果项目根目录已有 requirements.txt，就跳过扫描；
+        - 否则用 pipreqs 生成；
+        - 在 venv 中安装依赖并调用 PyInstaller；
+        - 无论成功或失败，都更新状态并恢复按钮/进度条。
         """
         import platform
         from PIL import Image
-        import subprocess
-        import shutil
-        import sys
 
         project_root = Path(script).resolve().parent
         app_name = self.name_ent.get().strip() or Path(script).stem
 
-        # 各路径
         dist_dir = project_root / "dist"
         build_dir = project_root / "build"
         spec_dir = project_root
-        venv_dir = project_root / ".aipack_venv"
+        venv_dir = Path.home() / ".aipack_venv"
         python_exe = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
         req_path = project_root / "requirements.txt"
         req_backup = project_root / "requirements.txt.bak"
 
-        # 保证 finally 中可用
         using_existing = False
         try:
-            # 0) 预清理旧产物
+            # 0) 清理旧产物
+            self.after(0, lambda: self._status("清理旧产物…"))
             self.pre_clean_artifacts(project_root, app_name)
 
-            # 1) 如果已有 requirements.txt 就跳过，否则生成
+            # 1) 处理 requirements.txt
             using_existing = req_path.exists()
             if using_existing:
                 self.after(0, lambda: self._status("发现现有 requirements.txt，跳过依赖扫描"))
             else:
-                # 备份旧文件（若存在且未备份）
                 if req_path.exists() and not req_backup.exists():
                     shutil.copy(req_path, req_backup)
-
-                self.after(0, lambda: self._status("pipreqs 正在分析依赖…"))
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "-q", "pipreqs>=0.4.13"])
+                self.after(0, lambda: self._status("分析依赖…"))
+                # 安装 pipreqs
+                subprocess.check_call(
+                    [sys.executable, "-m", "pip", "install", "pipreqs>=0.4.13"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                # 生成依赖文件
                 subprocess.check_call([
-                    sys.executable, "-m", "pipreqs.pipreqs", str(project_root),
+                    sys.executable, "-m", "pipreqs", str(project_root),
                     "--force", "--savepath", str(req_path), "--use-local"
                 ])
-                # 追加关键依赖
+                # 补充关键依赖
                 with req_path.open("a", encoding="utf-8") as f:
                     f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
                     f.write("pillow>=10.0\npyinstaller>=6.0\n")
 
-            # 2) 创建隔离 venv 并安装依赖
+            # 2) 创建隔离 venv
             if venv_dir.exists():
                 shutil.rmtree(venv_dir, ignore_errors=True)
+            self.after(0, lambda: self._status("创建虚拟环境…"))
             subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
-            self.after(0, lambda: self._status("安装依赖中，请稍候…"))
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
-            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--no-cache-dir", "-r", str(req_path)])
 
-            # 3) macOS：若是 PNG 图标则转 ICNS
-            icon_in = self.icon_ent.get().strip() or self.generated_icon
+            # 3) 安装依赖到 venv
+            self.after(0, lambda: self._status("安装依赖…"))
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+            subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", str(req_path)])
+
+            # 4) macOS 图标转换（可选）
+            icon_in = self.icon_ent.get().strip() or str(self.generated_icon or "")
             if icon_in and platform.system() == "Darwin":
                 ip = Path(icon_in)
                 if ip.suffix.lower() != ".icns":
-                    self.after(0, lambda: self._status("转换 icon 为 .icns…"))
+                    self.after(0, lambda: self._status("转换图标为 .icns…"))
                     Image.open(ip).save(ip.with_suffix(".icns"))
                     icon_in = str(ip.with_suffix(".icns"))
 
-            # 4) PyInstaller 打包（使用 venv 内 python）
+            # 5) 调用 PyInstaller
+            self.after(0, lambda: self._status("打包中…"))
             packer = PyInstallerPacker(
                 onefile=(False if platform.system() == "Darwin" else self.sw_one.get()),
                 windowed=self.sw_win.get(),
@@ -1546,24 +1564,24 @@ class AIconPackGUI(ctk.CTk):
             )
             ok = (result.returncode == 0)
 
-            # 5) 仅保留可执行：删除 build/ 和 .spec，保留 dist/
+            # 6) 保留可执行逻辑
             if ok and self.sw_keep.get():
                 self.clean_artifacts(project_root, app_name)
 
-            # 6) 写日志并更新状态
+            # 写日志
             (project_root / "pack_log.txt").write_text(
                 result.stdout + "\n" + result.stderr, encoding="utf-8"
             )
-            self.after(0, lambda: self._status(
-                "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"
-            ))
+            self.after(0, lambda: self._status("自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"))
 
-        except subprocess.CalledProcessError as e:
+        except Exception as e:
+            # 捕获所有异常，避免线程悄悄挂掉
             self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
         finally:
-            # 恢复备份的 requirements.txt（仅在生成流程中备份过）
+            # 恢复备份的 requirements.txt（若在本次流程中备份过）
             if not using_existing and req_backup.exists():
                 shutil.move(req_backup, req_path)
+            # 停止进度条 & 恢复按钮
             self.after(0, self.pack_bar.stop)
             self.after(0, lambda: self.auto_pack_btn.configure(state="normal"))
 
