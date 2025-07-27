@@ -757,6 +757,7 @@ class SettingsDialog(ctk.CTkToplevel):
         super().__init__(master)
         self.title("设置")
         self.geometry("520x550")
+        self.master: "AIconPackGUI" = master
         self.columnconfigure(0, weight=1)
         self.cfg = cfg  # 当前配置快照（初始填充到输入框）
 
@@ -1375,7 +1376,7 @@ class AIconPackGUI(ctk.CTk):
 
     # ---------- 打包辅助：清理残留 ----------
     def pre_clean_artifacts(
-            root: Path,
+            self: Path,
             app_name: str,
             dist_path: Optional[str] = None
     ) -> None:
@@ -1383,31 +1384,30 @@ class AIconPackGUI(ctk.CTk):
         预清理：删除 build/、dist/、<app_name>.spec、.aipack_venv/、requirements.txt.bak
         """
         # 删除 build/
-        shutil.rmtree(root / "build", ignore_errors=True)
+        shutil.rmtree(self / "build", ignore_errors=True)
         # 删除 dist/
         if dist_path:
             shutil.rmtree(Path(dist_path), ignore_errors=True)
         else:
-            shutil.rmtree(root / "dist", ignore_errors=True)
+            shutil.rmtree(self / "dist", ignore_errors=True)
         # 删除 .spec 文件
-        (root / f"{app_name}.spec").unlink(missing_ok=True)
+        (self / f"{app_name}.spec").unlink(missing_ok=True)
         # 删除可能存在的虚拟环境目录
-        shutil.rmtree(root / ".aipack_venv", ignore_errors=True)
+        shutil.rmtree(self / ".aipack_venv", ignore_errors=True)
         # 删除依赖备份
-        (root / "requirements.txt.bak").unlink(missing_ok=True)
+        (self / "requirements.txt.bak").unlink(missing_ok=True)
 
     def clean_artifacts(
-            root: Path,
-            app_name: str,
-            dist_path: Optional[str] = None
+            self: Path,
+            app_name: str
     ) -> None:
         """
         保留 dist：只删除 build/ 与 <app_name>.spec，保留 dist/ 目录
         """
         # 删除 build/
-        shutil.rmtree(root / "build", ignore_errors=True)
+        shutil.rmtree(self / "build", ignore_errors=True)
         # 删除 .spec 文件
-        (root / f"{app_name}.spec").unlink(missing_ok=True)
+        (self / f"{app_name}.spec").unlink(missing_ok=True)
 
     # ---------- 普通打包线程 ----------
     def _pack_thread(self, script: str, icon_path: Optional[str]):
@@ -1452,7 +1452,7 @@ class AIconPackGUI(ctk.CTk):
 
             # ③ 仅保留可执行（删除 build/ 和 .spec，保留 dist/）
             if ok and self.sw_keep.get():
-                self.clean_artifacts(project_root, app_name)
+                self.clean_artifacts(project_root)
 
             # ④ 写日志并更新状态
             (project_root / "pack_log.txt").write_text(
@@ -1461,7 +1461,7 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda: self._status("打包成功！" if ok else "打包失败！查看 pack_log.txt"))
 
         except Exception as e:
-            self.after(0, lambda e=e: self._status(f"打包异常: {e}"))
+            self.after(0, lambda err=e: self._status(f"打包异常: {err}"))
         finally:
             self.after(0, lambda: self.pack_btn.configure(state="normal"))
             self.after(0, self.pack_bar.stop)
@@ -1553,7 +1553,7 @@ class AIconPackGUI(ctk.CTk):
 
             # 5) 仅保留可执行：删除 build/ 和 .spec，保留 dist/
             if ok and self.sw_keep.get():
-                self.clean_artifacts(project_root, app_name)
+                self.clean_artifacts(project_root)
 
             # 6) 写日志并更新状态
             (project_root / "pack_log.txt").write_text(
@@ -1563,8 +1563,8 @@ class AIconPackGUI(ctk.CTk):
                 "自动打包成功！" if ok else "自动打包失败！查看 pack_log.txt"
             ))
 
-        except subprocess.CalledProcessError as err:
-            self.after(0, lambda err=err: self._status(f"自动打包异常: {err}"))
+        except subprocess.CalledProcessError as e:
+            self.after(0, lambda err=e: self._status(f"自动打包异常: {err}"))
         finally:
             # 恢复用户原 requirements.txt（若存在备份）
             if req_backup.exists():
