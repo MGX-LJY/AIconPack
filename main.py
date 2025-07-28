@@ -1405,12 +1405,20 @@ class AIconPackGUI(ctk.CTk):
         """
         保留 dist：只删除 build/、<app_name>.spec 和 .aipack_venv，保留 dist/ 目录
         """
-        # 删除 build/
+        # 1) 删除 build/
         shutil.rmtree(project_root / "build", ignore_errors=True)
-        # 删除 .spec 文件
-        (project_root / f"{app_name}.spec").unlink(missing_ok=True)
-        # 删除临时虚拟环境
-        shutil.rmtree(project_root / ".aipack_venv", ignore_errors=True)
+
+        # 2) 删除 PyInstaller 生成的 .spec 文件
+        spec_file = project_root / f"{app_name}.spec"
+        if spec_file.exists():
+            try:
+                spec_file.unlink()
+            except Exception as e:
+                print(f"无法删除 spec 文件 {spec_file}: {e}")
+
+        # 3) 删除临时虚拟环境目录
+        venv_dir = project_root / ".aipack_venv"
+        shutil.rmtree(venv_dir, ignore_errors=True)
 
     # ---------- 普通打包线程 ----------
     def _pack_thread(self, script: str, icon_path: Optional[str]):
