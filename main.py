@@ -1488,7 +1488,7 @@ class AIconPackGUI(ctk.CTk):
         dist_dir = project_root / "dist"
         build_dir = project_root / "build"
         spec_dir = project_root
-        venv_dir = Path.home() / ".aipack_venv"
+        venv_dir = project_root / ".aipack_venv"
         python_exe = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
         req_path = project_root / "requirements.txt"
@@ -1530,12 +1530,8 @@ class AIconPackGUI(ctk.CTk):
             self.after(0, lambda: self._status("安装依赖…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "-r", str(req_path)])
-
-            # —— **新增：显式安装 PyInstaller** ——
             self.after(0, lambda: self._status("安装 PyInstaller…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "pyinstaller>=6.0"])
-
-            # 4) macOS 图标转换（可选）
             icon_in = self.icon_ent.get().strip() or str(self.generated_icon or "")
             if icon_in and platform.system() == "Darwin":
                 ip = Path(icon_in)
