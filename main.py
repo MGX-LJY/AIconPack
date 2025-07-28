@@ -1501,6 +1501,7 @@ class AIconPackGUI(ctk.CTk):
             self.pre_clean_artifacts(project_root, app_name)
 
             # 1) 处理 requirements.txt
+            system_py = shutil.which("python3") or "/Users/martinezdavid/.virtualenvs/AIconPack/bin/python"
             using_existing = req_path.exists()
             if using_existing:
                 self.after(0, lambda: self._status("发现现有 requirements.txt，跳过依赖扫描"))
@@ -1509,14 +1510,13 @@ class AIconPackGUI(ctk.CTk):
                     shutil.copy(req_path, req_backup)
                 self.after(0, lambda: self._status("分析依赖…"))
                 subprocess.check_call(
-                    [sys.executable, "-m", "pip", "install", "pipreqs>=0.4.13"],
+                    [system_py, "-m", "pip", "install", "pipreqs>=0.4.13"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 subprocess.check_call([
-                    sys.executable, "-m", "pipreqs", str(project_root),
+                    system_py, "-m", "pipreqs", str(project_root),
                     "--force", "--savepath", str(req_path), "--use-local"
                 ])
-                # 补充关键依赖（包括 pyinstaller）
                 with req_path.open("a", encoding="utf-8") as f:
                     f.write("\nPyQt6>=6.6\nPyQt6-Qt6>=6.6\nPyQt6-sip>=13.6\n")
                     f.write("pillow>=10.0\npyinstaller>=6.0\n")
@@ -1524,8 +1524,6 @@ class AIconPackGUI(ctk.CTk):
             # 2) 创建隔离 venv
             if venv_dir.exists():
                 shutil.rmtree(venv_dir, ignore_errors=True)
-            self.after(0, lambda: self._status("创建虚拟环境…"))
-            system_py = shutil.which("python3") or "/Users/martinezdavid/.virtualenvs/AIconPack/bin/python"
             self.after(0, lambda: self._status("创建虚拟环境…"))
             subprocess.check_call([system_py, "-m", "venv", "--upgrade-deps", str(venv_dir)])
             # 3) 安装依赖到 venv
