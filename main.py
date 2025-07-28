@@ -25,7 +25,6 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, Toplevel, Label
 from typing import Any, Iterable, List, Literal, Mapping, Optional, Sequence
-
 # ────────────────────  3rd-party  ────────────────────
 import customtkinter as ctk
 import requests
@@ -1526,11 +1525,9 @@ class AIconPackGUI(ctk.CTk):
             if venv_dir.exists():
                 shutil.rmtree(venv_dir, ignore_errors=True)
             self.after(0, lambda: self._status("创建虚拟环境…"))
-            # —— 使用标准库 venv 模块，避免 spawn 自己，且内置 ensurepip ——
-            import venv as _venv
-            builder = _venv.EnvBuilder(with_pip=True)
-            builder.create(str(venv_dir))
-
+            system_py = shutil.which("python3") or "/Users/martinezdavid/.virtualenvs/AIconPack/bin/python"
+            self.after(0, lambda: self._status("创建虚拟环境…"))
+            subprocess.check_call([system_py, "-m", "venv", "--upgrade-deps", str(venv_dir)])
             # 3) 安装依赖到 venv
             self.after(0, lambda: self._status("安装依赖…"))
             subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
